@@ -1,10 +1,12 @@
 # app.py
 import os
-from flask import Flask, render_template, redirect, url_for
+from flask import Flask, render_template
 from dotenv import load_dotenv
 from flask_login import LoginManager, current_user
 from sqlalchemy import text, inspect as sqla_inspect
+from flask_socketio import SocketIO, emit
 
+# models
 from models import (
     db, User, Notification, PlayerBalance, Game, GameAccount,
     DepositRequest, PaymentSettings
@@ -26,6 +28,9 @@ except Exception:
 
 load_dotenv()
 
+# Socket.IO instance (eventlet mode). init_app happens inside create_app()
+socketio = SocketIO(async_mode="eventlet", cors_allowed_origins="*")
+
 
 def create_app():
     app = Flask(__name__)
@@ -33,7 +38,11 @@ def create_app():
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///casino.db")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+    # DB
     db.init_app(app)
+
+    # Socket.IO (bind to this app)
+    socketio.init_app(app)
 
     # ------------------ tiny kv fallback (shared) ------------------
     def _ensure_kv():
@@ -137,6 +146,11 @@ def create_app():
     app.register_blueprint(player_bp)
     if chat_bp:
         app.register_blueprint(chat_bp)
+
+    # ------------------ health ------------------
+    @app.get("/health")
+    def health():
+        return {"ok": True, "service": "web", "env": os.getenv("NODE_ENV", "production")}
 
     # ------------------ Home / Lobby (ONE PAGE) ------------------
     @app.route("/")
@@ -272,6 +286,11 @@ def create_app():
 
         seed_admin()
 
+    # ------------------ Socket.IO sample handlers ------------------
+    @socketio.on("connect")
+    def _on_connect():
+        emit("welcome", {"msg": "Connected to live chat"})
+
     return app
 
 
@@ -289,6 +308,11 @@ def seed_admin():
         print("✅ Admin user created from .env")
 
 
+# -------- module-level app for gunicorn (app:app) --------
+app = create_app()
+
+
+# -------- local development entry (Render won't use this block) --------
 if __name__ == "__main__":
-    app = create_app()
-    app.run(host="127.0.0.1", port=5000, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
+    # Run with Socket.IO (eventlet) locally
+    socketio.run(app, host="127.0.0.1", port=5000, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
