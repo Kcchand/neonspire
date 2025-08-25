@@ -1,0 +1,192 @@
+{# templates/_chat_widget.html #}
+<div id="chatDock"
+     style="position:fixed;right:16px;bottom:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+  <button id="chatToggle" class="btn btn-primary"
+          style="border-radius:999px;padding:.5rem .8rem;box-shadow:0 6px 18px rgba(0,0,0,.25)">
+    💬 Live Chat
+  </button>
+
+  <div id="chatPanel"
+       style="display:none;width:320px;max-height:70vh;border:1px solid var(--stroke,#2a2e37);border-radius:12px;background:var(--panel,#0f1115);overflow:hidden">
+    <div style="padding:10px;border-bottom:1px solid var(--stroke,#2a2e37);display:flex;align-items:center;justify-content:space-between">
+      <strong>Live Chat</strong>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="chatRoom" style="background:transparent;border:1px solid var(--stroke);color:var(--text);border-radius:8px;padding:2px 6px">
+          <option value="global" selected>Global</option>
+        </select>
+        <span id="chatStatus" class="muted" style="font-size:12px">…</span>
+        <button id="chatClose" class="btn btn-mini btn-ghost">✕</button>
+      </div>
+    </div>
+
+    <div id="chatViewport" style="padding:10px;overflow:auto;height:48vh;background:rgba(255,255,255,.02)">
+      <div id="chatList" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+
+    <div style="padding:10px;border-top:1px solid var(--stroke,#2a2e37)">
+      {% if current_user.is_authenticated %}
+        <form id="chatForm" style="display:flex;gap:8px;align-items:flex-end">
+          <textarea id="chatInput" rows="1" maxlength="1000" placeholder="Type a message…"
+                    style="flex:1;resize:vertical;max-height:140px;min-height:38px;border:1px solid var(--stroke);border-radius:10px;padding:8px;background:var(--panel);color:var(--text)"></textarea>
+          <button class="btn btn-primary" type="submit">Send</button>
+        </form>
+        <div class="muted" style="margin-top:6px;font-size:12px">Enter to send • Shift+Enter for new line</div>
+      {% else %}
+        <div class="muted" style="font-size:12px">Sign in to chat.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const el = {
+    toggle  : document.getElementById('chatToggle'),
+    panel   : document.getElementById('chatPanel'),
+    close   : document.getElementById('chatClose'),
+    list    : document.getElementById('chatList'),
+    view    : document.getElementById('chatViewport'),
+    input   : document.getElementById('chatInput'),
+    form    : document.getElementById('chatForm'),
+    roomSel : document.getElementById('chatRoom'),
+    status  : document.getElementById('chatStatus'),
+  };
+
+  let lastId = 0;
+  let room   = 'global';
+  let timer  = null;
+
+  const makeBubble = (m) => {
+    const wrap = document.createElement('div');
+    wrap.style.display = 'grid';
+    wrap.style.gridTemplateColumns = '1fr auto';
+    wrap.style.gap = '6px';
+    wrap.style.alignItems = 'baseline';
+
+    const who = document.createElement('div');
+    who.style.fontSize = '12px';
+    who.style.opacity = .85;
+    const tag = (m.user_role||'').toUpperCase();
+    who.textContent = (m.user_name || 'User') + (tag ? ' · ' + tag : '');
+
+    const when = document.createElement('div');
+    when.className = 'muted';
+    when.style.fontSize = '11px';
+    try{ when.textContent = new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }catch(_){ when.textContent=''; }
+
+    const body = document.createElement('div');
+    body.style.gridColumn = '1 / -1';
+    body.style.background = 'rgba(255,255,255,.06)';
+    body.style.border = '1px solid rgba(255,255,255,.08)';
+    body.style.borderRadius = '10px';
+    body.style.padding = '6px 8px';
+    body.style.whiteSpace = 'pre-wrap';
+    body.style.wordBreak = 'break-word';
+    body.textContent = m.message || '';
+
+    wrap.appendChild(who);
+    wrap.appendChild(when);
+    wrap.appendChild(body);
+    return wrap;
+  };
+
+  function render(items){
+    if(!items || !items.length) return;
+    const frag = document.createDocumentFragment();
+    for(const m of items){
+      lastId = Math.max(lastId, m.id || 0);
+      frag.appendChild(makeBubble(m));
+    }
+    el.list.appendChild(frag);
+    el.view.scrollTop = el.view.scrollHeight;
+  }
+
+  async function fetchJSON(url, opts){
+    const res = await fetch(url, opts || {});
+    const ct = res.headers.get('content-type') || '';
+    if(!ct.includes('application/json')){
+      // don’t alert the full HTML page; just log.
+      const txt = await res.text();
+      console.debug('chat non-JSON:', txt.slice(0,200));
+      throw new Error('Network error');
+    }
+    const data = await res.json();
+    if(!res.ok || data.ok === false){
+      throw new Error(data.error || ('HTTP ' + res.status));
+    }
+    return data;
+  }
+
+  async function poll(initial=false){
+    try{
+      // Support your server log pattern: /chat/messages?after_id=...
+      const url = `/chat/messages?after_id=${encodeURIComponent(lastId)}&room=${encodeURIComponent(room)}`;
+      const data = await fetchJSON(url);
+      // If your alias returns {"ok": True, "items": [...]}, this works.
+      // If it returns the same shape as /fetch, also fine.
+      render(data.items || data.messages || []);
+      if(el.status) el.status.textContent = 'Connected';
+    }catch(e){
+      if(el.status) el.status.textContent = 'Disconnected';
+      console.debug('chat poll error:', e.message);
+      if(initial){
+        // fallback try without after_id
+        try{
+          const url2 = `/chat/messages?room=${encodeURIComponent(room)}`;
+          const data2 = await fetchJSON(url2);
+          render(data2.items || data2.messages || []);
+        }catch(_){}
+      }
+    }
+  }
+
+  function start(){ stop(); poll(true); timer = setInterval(poll, 3000); }
+  function stop(){ if(timer){ clearInterval(timer); timer = null; } }
+
+  // UI
+  if(el.toggle){
+    el.toggle.addEventListener('click', ()=>{
+      const open = el.panel.style.display === 'block';
+      el.panel.style.display = open ? 'none' : 'block';
+      if(!open){ start(); setTimeout(()=> el.view.scrollTop = el.view.scrollHeight, 20); if(el.input) el.input.focus(); }
+      else { stop(); }
+    });
+  }
+  if(el.close){ el.close.addEventListener('click', ()=>{ el.panel.style.display='none'; stop(); }); }
+  if(el.roomSel){ el.roomSel.addEventListener('change', ()=>{ room = el.roomSel.value || 'global'; lastId=0; el.list.innerHTML=''; start(); }); }
+
+  {% if current_user.is_authenticated %}
+  if(el.form && el.input){
+    el.form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const msg = (el.input.value || '').trim();
+      if(!msg) return;
+      el.input.value = '';
+      el.input.style.height = '38px';
+      try{
+        // Match your 404 log family: /chat/send
+        const data = await fetchJSON('/chat/send', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ message: msg, room })
+        });
+        if(data && data.item){ render([data.item]); } else { poll(); }
+      }catch(err){
+        alert(err.message || 'Failed to send');
+      }
+    });
+
+    el.input.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        el.form.dispatchEvent(new Event('submit'));
+      }
+    });
+    el.input.addEventListener('input', ()=>{
+      el.input.style.height = '38px';
+      el.input.style.height = Math.min(140, el.input.scrollHeight) + 'px';
+    });
+  }
+  {% endif %}
+})();
+</script>

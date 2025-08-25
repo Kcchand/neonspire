@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>💸 Review player cash‑out requests</span>
+    <span>Mark as Paid when you’ve sent the funds</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+
+  <!-- Pending Withdrawals -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Pending Withdrawals</div>
+      <div class="muted">{{ pending|length }} waiting</div>
+    </div>
+
+    {% if pending %}
+      <div class="table">
+        <div class="t-head">
+          <div>Player</div>
+          <div>Game</div>
+          <div>Amount</div>
+          <div class="t-right">Actions</div>
+        </div>
+
+        {% for w in pending %}
+          <div class="t-row">
+            <div>
+              {% set u = users.get(w.user_id) %}
+              {{ (u.name or u.email) if u else ('User #' ~ w.user_id) }}
+              <div class="muted" style="font-size:12px">via {{ w.method or 'MANUAL' }}</div>
+            </div>
+
+            <div>
+              {% if w.game_id %}
+                {% set g = games.get(w.game_id) %}
+                {{ g.name if g else ('Game #' ~ w.game_id) }}
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </div>
+
+            <div>${{ w.amount or 0 }}</div>
+
+            <div class="t-right" style="display:flex;gap:8px;justify-content:flex-end">
+              <!-- Mark Paid (with optional tip) -->
+              <form method="post" action="{{ url_for('employeebp.withdrawals_paid', wd_id=w.id) }}" style="display:flex;gap:6px;align-items:center">
+                <input type="number" name="tip_amount" min="0" placeholder="Tip" style="width:90px;background:var(--panel-2);border:1px solid var(--stroke);border-radius:10px;color:var(--text);padding:6px 8px">
+                <button class="btn btn-mini btn-primary" type="submit">Mark Paid</button>
+              </form>
+
+              <!-- Reject -->
+              <form method="post" action="{{ url_for('employeebp.withdrawals_reject', wd_id=w.id) }}">
+                <button class="btn btn-mini" type="submit">Reject</button>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty muted">No pending withdrawals.</div>
+    {% endif %}
+  </div>
+
+  <!-- Recent (Paid / Rejected) -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Recent</div>
+      <div class="muted">{{ recent|length }} shown</div>
+    </div>
+
+    {% if recent %}
+      <div class="table">
+        <div class="t-head">
+          <div>Player</div>
+          <div>Game</div>
+          <div>Status</div>
+          <div class="t-right">Amount</div>
+        </div>
+
+        {% for w in recent %}
+          <div class="t-row">
+            <div>
+              {% set u = users.get(w.user_id) %}
+              {{ (u.name or u.email) if u else ('User #' ~ w.user_id) }}
+              <div class="muted" style="font-size:12px">via {{ w.method or 'MANUAL' }}</div>
+            </div>
+
+            <div>
+              {% if w.game_id %}
+                {% set g = games.get(w.game_id) %}
+                {{ g.name if g else ('Game #' ~ w.game_id) }}
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </div>
+
+            <div>
+              {% if w.status == 'PAID' %}
+                <span class="chip">✅ Paid</span>
+              {% elif w.status == 'REJECTED' %}
+                <span class="chip">⛔ Rejected</span>
+              {% else %}
+                <span class="chip">⏳ {{ w.status }}</span>
+              {% endif %}
+            </div>
+
+            <div class="t-right">${{ w.amount or 0 }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty muted">No recent withdrawals.</div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

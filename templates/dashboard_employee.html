@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell admin-wrap" style="margin-top:14px">
+
+  <!-- Header -->
+  <div class="panel">
+    <div class="admin-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div class="admin-title">Employee Console</div>
+      <div class="admin-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn chip-btn" href="{{ url_for('employeebp.deposits_list') }}">Deposits</a>
+        <a class="btn chip-btn" href="{{ url_for('employeebp.requests_list') }}">Game Requests</a>
+        <a class="btn chip-btn" href="{{ url_for('employeebp.withdrawals_list') }}">Withdrawals</a>
+        <a class="btn chip-btn btn-primary" href="{{ url_for('chat_bp.inbox') }}">Live Chat</a>
+      </div>
+    </div>
+    <div class="muted">
+      Process player deposits, approve/reject game login requests, pay withdrawals, and chat with players directly.
+    </div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="admin-metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+    <!-- Deposits -->
+    <div class="metric panel" style="padding:14px">
+      <div class="metric-label muted">Pending Deposits</div>
+      <div class="metric-value" style="font-size:28px;font-weight:800;line-height:1.2">{{ pending_deposits or 0 }}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-mini btn-primary" href="{{ url_for('employeebp.deposits_list') }}">Review Deposits</a>
+      </div>
+    </div>
+
+    <!-- Game Requests -->
+    <div class="metric panel" style="padding:14px">
+      <div class="metric-label muted">Pending Game Requests</div>
+      <div class="metric-value" style="font-size:28px;font-weight:800;line-height:1.2">{{ pending_requests or 0 }}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-mini" href="{{ url_for('employeebp.requests_list') }}">Provide Logins</a>
+      </div>
+      <div class="muted" style="margin-top:6px;font-size:12px">
+        Tip: Open a request with “Provide Logins.” Inside the card you’ll find <b>Save</b>, <b>Approve</b>, and <b>Reject</b>.
+      </div>
+    </div>
+
+    <!-- Withdrawals -->
+    <div class="metric panel" style="padding:14px">
+      <div class="metric-label muted">Pending Withdrawals</div>
+      <div class="metric-value" style="font-size:28px;font-weight:800;line-height:1.2">{{ pending_withdraws or 0 }}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-mini" href="{{ url_for('employeebp.withdrawals_list') }}">Pay Out</a>
+      </div>
+    </div>
+
+    <!-- Live Chat -->
+    <div class="metric panel" style="padding:14px">
+      <div class="metric-label muted">Live Chat</div>
+      <div class="metric-value" style="font-size:16px;font-weight:800;line-height:1.2">Support</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-mini btn-primary" href="{{ url_for('chat_bp.inbox') }}">Open Chat Inbox</a>
+      </div>
+      <div class="muted" style="margin-top:6px;font-size:12px">
+        See who messaged you (with full player name &amp; email) and reply in a private thread.
+      </div>
+    </div>
+  </div>
+
+  <!-- Work Queues Shortcuts -->
+  <div class="panel" style="margin-top:12px">
+    <div class="section-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div class="section-title">Work Queues</div>
+    </div>
+    <div class="chip-row" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+      <a class="chip" href="{{ url_for('employeebp.deposits_list') }}">💳 Review Deposits</a>
+      <a class="chip" href="{{ url_for('employeebp.requests_list') }}">🔐 Provide Game Logins</a>
+      <!-- Removed: Reject Requests shortcut -->
+      <a class="chip" href="{{ url_for('employeebp.withdrawals_list') }}">💸 Handle Withdrawals</a>
+      <a class="chip" href="{{ url_for('chat_bp.inbox') }}">💬 Live Chat Inbox</a>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

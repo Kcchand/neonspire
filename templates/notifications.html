@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell" style="margin-top:8px">
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Notifications</div>
+      <form method="post" action="{{ url_for('notifybp.mark_all_read') }}">
+        <button class="btn btn-mini" type="submit">Mark all as read</button>
+      </form>
+    </div>
+
+    <div class="h3" style="margin-top:4px">Unread</div>
+    {% if unread %}
+      <div class="table" style="margin-top:8px">
+        {% for n in unread %}
+          <div class="t-row" style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center">
+            <div>{{ n.message }}</div>
+            <form method="post" action="{{ url_for('notifybp.mark_read', note_id=n.id) }}">
+              <button class="btn btn-mini" type="submit">Mark as read</button>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="muted" style="margin-top:6px">No unread notifications.</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="h3">History</div>
+    {% if history %}
+      <div class="table" style="margin-top:8px">
+        {% for n in history %}
+          <div class="t-row">{{ n.message }}</div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="muted" style="margin-top:6px">No previous notifications.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

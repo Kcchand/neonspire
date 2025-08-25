@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="shell">
+
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
+    <div class="h3" style="font-size:20px">⚙️ Admin Settings</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <a class="btn" href="{{ url_for('adminbp.admin_home') }}">Overview</a>
+      <a class="btn" href="{{ url_for('adminbp.games_list') }}">Manage Games</a>
+      <a class="btn" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
+    </div>
+  </div>
+
+  <!-- Add Credits Methods -->
+  <div class="panel">
+    <div class="h3">💳 Add Funds — Methods</div>
+    <p class="muted" style="margin:6px 0 14px">Configure wallet/handle and optional QR images. These appear in the player lobby.</p>
+
+    <div class="method-row">
+
+      <!-- Crypto -->
+      <div class="method">
+        <div class="method-title">Crypto</div>
+
+        <form method="post" action="{{ url_for('adminbp.update_crypto_qr') }}" enctype="multipart/form-data">
+          <label class="muted" for="crypto_wallet_text">Wallet / Address</label>
+          <textarea id="crypto_wallet_text" name="crypto_wallet_text" rows="2" class="input" placeholder="USDT-TRC20 wallet or any crypto address">{{ settings.crypto_wallet_text if settings else '' }}</textarea>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="crypto_qr">QR Image (optional)</label>
+              <input id="crypto_qr" type="file" name="crypto_qr" accept="image/*" class="input" />
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG up to ~5MB</div>
+            </div>
+            {% if settings and settings.crypto_qr_url %}
+              <img src="{{ settings.crypto_qr_url }}" alt="Crypto QR" class="qr">
+            {% endif %}
+          </div>
+
+          <div style="margin-top:12px">
+            <button class="btn btn-primary" type="submit">Save Crypto</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Chime -->
+      <div class="method">
+        <div class="method-title">Chime</div>
+
+        <form method="post" action="{{ url_for('adminbp.update_chime_qr') }}" enctype="multipart/form-data">
+          <label class="muted" for="chime_handle">Chime Handle</label>
+          <textarea id="chime_handle" name="chime_handle" rows="2" class="input" placeholder="@your-chime-handle">{{ settings.chime_handle if settings else '' }}</textarea>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="chime_qr">QR Image (optional)</label>
+              <input id="chime_qr" type="file" name="chime_qr" accept="image/*" class="input" />
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG up to ~5MB</div>
+            </div>
+            {% if settings and settings.chime_qr_url %}
+              <img src="{{ settings.chime_qr_url }}" alt="Chime QR" class="qr">
+            {% endif %}
+          </div>
+
+          <div style="margin-top:12px">
+            <button class="btn btn-primary" type="submit">Save Chime</button>
+          </div>
+        </form>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Limits -->
+  <div class="panel">
+    <div class="h3">💵 Withdrawal Limits</div>
+    <form method="post" action="{{ url_for('adminbp.update_limits') }}">
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:12px;align-items:end">
+        <div>
+          <label class="muted" for="min_redeem">Min Withdraw</label>
+          <input id="min_redeem" name="min_redeem" type="number" class="input" placeholder="e.g. 50"
+                 value="{{ settings.min_redeem if settings and settings.min_redeem is not none else '' }}">
+        </div>
+        <div>
+          <label class="muted" for="max_redeem">Max Withdraw</label>
+          <input id="max_redeem" name="max_redeem" type="number" class="input" placeholder="e.g. 500"
+                 value="{{ settings.max_redeem if settings and settings.max_redeem is not none else '' }}">
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn btn-primary" type="submit">Save Limits</button>
+      </div>
+    </form>
+  </div>
+
+</div>
+{% endblock %}

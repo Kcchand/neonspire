@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ page_title or "NeonSpire Casino" }}</title>
+
+  <!-- Consistent font across desktop/tablet/mobile -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  {# cache-bust CSS so users don’t keep stale assets #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}?v=dm2">
+</head>
+<body>
+
+  <!-- Top Navigation -->
+  <header class="nav" style="position:sticky;top:0;z-index:50;background:rgba(0,0,0,.25);backdrop-filter:blur(8px);border-bottom:1px solid var(--stroke)">
+    <div class="shell nav-inner" style="display:flex;align-items:center;justify-content:space-between;height:58px">
+      <!-- Brand -->
+      <a href="{{ url_for('index') }}" class="brand"
+         style="display:flex;gap:10px;align-items:center;text-decoration:none;color:inherit;font-weight:900;font-size:22px">
+        <span class="dot" style="width:10px;height:10px;border-radius:50%;background:#19e1a5;box-shadow:0 0 10px #19e1a5;"></span>
+        <span>NeonSpire Casino</span>
+      </a>
+
+      <!-- Right side -->
+      <nav class="nav-links" style="display:flex;align-items:center;gap:10px">
+        {% if not current_user.is_authenticated or current_user.role == 'PLAYER' %}
+          <a class="pill" href="{{ url_for('index') }}">Lobby</a>
+        {% endif %}
+
+        {% if current_user.is_authenticated %}
+          {% if current_user.role == 'ADMIN' %}
+            <a class="pill" href="{{ url_for('adminbp.admin_home') }}">Admin</a>
+          {% elif current_user.role == 'EMPLOYEE' %}
+            <a class="pill" href="{{ url_for('employeebp.employee_home') }}">Employee</a>
+          {% else %}
+            <a class="pill" href="{{ url_for('playerbp.accounts_page') }}">My Logins</a>
+          {% endif %}
+
+          <a class="pill" href="{{ url_for('notifybp.list_notifications') }}">🔔 {{ unread_count or 0 }}</a>
+
+          <span class="pill" style="pointer-events:none;opacity:.85">
+            Hi, {{ current_user.name.split(' ')[0] if current_user.name else 'Player' }}
+          </span>
+          <a class="btn btn-ghost" href="{{ url_for('auth.logout') }}">Logout</a>
+        {% else %}
+          <a class="pill" href="{{ url_for('auth.login_get') }}">Login</a>
+          <a class="btn btn-primary" href="{{ url_for('auth.register_get') }}">Register</a>
+        {% endif %}
+
+        <!-- Dark mode toggle -->
+        <label class="toggle" style="margin-left:6px">
+          <input id="themeToggleTop" type="checkbox" />
+          <span class="track"><span class="knob"></span></span>
+          <span class="label">Dark</span>
+        </label>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Main Shell -->
+  <main style="padding-top:18px;padding-bottom:20px">
+    {% block hero %}{% endblock %}
+
+    <div class="shell" style="margin-top:12px">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="grid" style="display:grid;gap:8px">
+            {% for category, message in messages %}
+              <div class="panel" style="border-color:
+                {% if category == 'success' %}rgba(18,217,161,.55)
+                {% elif category in ['error','danger'] %}rgba(255,93,93,.6)
+                {% else %}var(--stroke){% endif %};
+              ">{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% if error %}
+        <div class="panel" style="border-color:rgba(255,93,93,.55)">
+          <div class="h3">⚠️ {{ error }}</div>
+          <div class="muted" style="margin-top:6px">If this looks wrong, sign in with the correct role or contact support.</div>
+        </div>
+      {% endif %}
+    </div>
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer -->
+  <footer class="shell footer"
+          style="height:68px;border-top:1px solid var(--stroke);margin-top:24px;
+                 display:flex;align-items:center;justify-content:center;">
+    © {{ 2025 }} NeonSpire Casino &nbsp;•&nbsp;
+    <span class="muted">Player flow is seamless &amp; automatic.</span>
+  </footer>
+
+  {# ========= Private DM widget (players only). ========= #}
+  {# Do NOT include the old "_chat_widget.html". #}
+  {% if current_user.is_authenticated and current_user.role == 'PLAYER' %}
+    {% include "_dm_widget.html" %}
+  {% endif %}
+
+  <script>
+    (function(){
+      const KEY='theme';
+      const root=document.documentElement;
+      const saved=localStorage.getItem(KEY);
+      if(saved==='light'){ root.dataset.theme='light'; }
+      const t=document.getElementById('themeToggleTop');
+      if(t){
+        t.checked = root.dataset.theme!=='light';
+        t.addEventListener('change', ()=>{
+          root.dataset.theme = t.checked ? 'dark' : 'light';
+          localStorage.setItem(KEY, root.dataset.theme);
+        });
+      }
+    })();
+  </script>
+
+  {# cache-bust JS to avoid legacy /chat/messages callers #}
+  <script src="{{ url_for('static', filename='js/main.js') }}?v=dm2"></script>
+</body>
+</html>

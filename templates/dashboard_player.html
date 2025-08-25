@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block hero %}
+{# --- Scrolling News Banner (admin-controlled) --- #}
+{% set has_any = (promo_line1 or promo_line2 or (bonus_percent is not none) or (settings and settings.bonus_percent)) %}
+{% if has_any %}
+<div class="news-ticker" aria-label="Site announcements">
+  <div class="news-mask news-mask--left" aria-hidden="true"></div>
+  <div class="shell news-inner">
+    <div class="news-track" id="newsTrack">
+      {% if promo_line1 %}<span class="news-item">{{ promo_line1 }}</span>{% endif %}
+      {% if promo_line2 %}
+        {% if promo_line1 %}<span class="news-sep">•</span>{% endif %}
+        <span class="news-item">{{ promo_line2 }}</span>
+      {% endif %}
+      {% set bp = bonus_percent if bonus_percent is not none else (settings.bonus_percent if settings else 0) %}
+      {% if bp and bp|int > 0 %}
+        <span class="news-sep">•</span>
+        <span class="news-item">💎 +{{ bp|int }}% bonus on credit loads</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="news-mask news-mask--right" aria-hidden="true"></div>
+</div>
+
+<style>
+.news-ticker{position:relative;width:100%;background:rgba(18,20,25,.95);border-bottom:1px solid var(--stroke,#2a2e37);overflow:hidden;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 24px rgba(0,0,0,.18)}
+.news-inner{position:relative;white-space:nowrap;overflow:hidden;padding:10px 0}
+.news-track{display:inline-block;will-change:transform;animation:news-marquee var(--marquee-duration,20s) linear infinite}
+.news-item{display:inline-flex;align-items:center;gap:.35rem;padding:0 .75rem;font-weight:700;letter-spacing:.2px}
+.news-sep{opacity:.55;padding:0 .35rem}
+.news-mask{position:absolute;top:0;bottom:0;width:60px;pointer-events:none;z-index:1;background:linear-gradient(to right,rgba(18,20,25,1) 0%,rgba(18,20,25,0) 100%)}
+.news-mask--right{right:0;transform:scaleX(-1)}
+.news-mask--left{left:0}
+@keyframes news-marquee{0%{transform:translateX(0)}100%{transform:translateX(var(--marquee-distance,-50%))}}
+.news-ticker:hover .news-track{animation-play-state:paused}
+@media (prefers-reduced-motion:reduce){.news-track{animation:none}}
+</style>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const track = document.getElementById("newsTrack");
+  if(!track) return;
+  const container = track.parentElement;
+  const baseHTML = track.innerHTML.trim();
+  if (!baseHTML) return;
+
+  let clones = 0;
+  while (track.scrollWidth < container.clientWidth * 2 && clones < 10) {
+    track.insertAdjacentHTML("beforeend", baseHTML);
+    clones++;
+  }
+
+  const pxPerSec = 120;
+  const distance = track.scrollWidth / 2;
+  const duration = Math.max(12, Math.round(distance / pxPerSec));
+  track.style.setProperty("--marquee-distance", `-${distance}px`);
+  track.style.setProperty("--marquee-duration", `${duration}s`);
+
+  let t;
+  window.addEventListener("resize", () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      track.style.animation = "none";
+      track.innerHTML = baseHTML;
+      let clones2 = 0;
+      while (track.scrollWidth < container.clientWidth * 2 && clones2 < 10) {
+        track.insertAdjacentHTML("beforeend", baseHTML);
+        clones2++;
+      }
+      const d2 = track.scrollWidth / 2;
+      const dur2 = Math.max(12, Math.round(d2 / 120));
+      track.style.setProperty("--marquee-distance", `-${d2}px`);
+      track.style.setProperty("--marquee-duration", `${dur2}s`);
+      requestAnimationFrame(() => { track.style.animation = ""; });
+    }, 150);
+  });
+});
+</script>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<!-- Keep rail at LEFT on all devices -->
+<div class="shell player-grid" style="margin-top:14px">
+
+  <!-- Left rail -->
+  <aside class="rail rail--sticky">
+    <div class="rail-card">
+      <div class="rail-title">Add Funds</div>
+      {% if current_user.is_authenticated %}
+        <a class="btn btn-primary btn-wide" href="{{ url_for('playerbp.deposit_step1') }}">Add Credits</a>
+        <div class="method-row" style="margin-top:10px">
+          <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}">Chime</a>
+          <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}">Crypto</a>
+        </div>
+        <div class="rail-sub">Crypto &amp; Chime supported.</div>
+      {% else %}
+        <a class="btn btn-primary btn-wide" href="{{ url_for('auth.register_get') }}">Create account to add funds</a>
+        <div class="rail-sub">Sign in to deposit with Crypto or Chime.</div>
+      {% endif %}
+    </div>
+
+    <div class="rail-card">
+      <div class="rail-title">Withdraw</div>
+      {% if current_user.is_authenticated %}
+        <a class="btn btn-wide" href="{{ url_for('playerbp.withdraw_get') }}">Request Payout</a>
+        {% if settings %}
+          <div class="rail-sub">Min: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>
+        {% endif %}
+      {% else %}
+        <a class="btn btn-wide" href="{{ url_for('auth.login_get') }}">Sign in</a>
+        <div class="rail-sub">Withdrawals require an account.</div>
+      {% endif %}
+    </div>
+
+    <div class="rail-card" id="contact">
+      <div class="rail-title">Contact Us</div>
+      <div class="contact-grid">
+        <a class="btn btn-mini btn-wide" target="_blank" rel="noopener" href="https://wa.me/1234567890">WhatsApp</a>
+        <a class="btn btn-mini btn-wide" target="_blank" rel="noopener" href="https://t.me/yourusername">Telegram</a>
+        <a class="btn btn-mini btn-wide" target="_blank" rel="noopener" href="https://facebook.com/yourpage">Facebook</a>
+        <a class="btn btn-mini btn-wide" target="_blank" rel="noopener" href="https://instagram.com/yourprofile">Instagram</a>
+      </div>
+      <div class="rail-sub" style="margin-top:8px">We’re available 24/7.</div>
+    </div>
+
+    <div class="rail-card">
+      <div class="rail-title">Referral Program</div>
+      {% if current_user.is_authenticated %}
+        <a class="btn btn-wide" href="#">Get My Link</a>
+      {% else %}
+        <a class="btn btn-wide" href="{{ url_for('auth.register_get') }}">Get My Link</a>
+      {% endif %}
+    </div>
+  </aside>
+
+  <!-- Main column -->
+  <section>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div class="h3">Today’s Trending</div>
+        <div class="muted">Updated live</div>
+      </div>
+      <div class="chip-row">
+        {% for tg in trending_games %}
+          <span class="chip" title="{{ tg.name }}">
+            {% if tg.icon_url %}<img class="chip-icon" src="{{ tg.icon_url }}" alt="{{ tg.name }}">{% endif %}
+            {{ tg.name }}
+          </span>
+        {% else %}
+          <span class="muted">No games yet.</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div class="h3">Games</div>
+        {% if settings %}
+          <div class="muted">Min withdraw: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>
+        {% endif %}
+      </div>
+
+      <div class="game-grid">
+        {% for g in games %}
+          <article class="game-card">
+            <div class="game-media">
+              {% if g.icon_url %}
+                <img src="{{ g.icon_url }}" alt="{{ g.name }}">
+              {% else %}
+                <div class="media-fallback">🎮</div>
+              {% endif %}
+            </div>
+
+            <div class="game-body">
+              <div class="game-title" title="{{ g.name }}">{{ g.name }}</div>
+              <div class="game-sub show-full" title="{{ g.description or '' }}">
+                {{ g.description or "Hottest game on the market" }}
+              </div>
+            </div>
+
+            <!-- ONE ROW of 4 buttons, text always visible -->
+            <div class="game-actions btn-grid">
+              {% if g.download_url %}
+                <a class="btn btn-action" target="_blank" href="{{ g.download_url }}">Download</a>
+              {% else %}
+                <button class="btn btn-action" disabled>Download</button>
+              {% endif %}
+
+              {% if current_user.is_authenticated %}
+                <a class="btn btn-action" href="{{ url_for('playerbp.deposit_step1') }}?game_id={{ g.id }}">Deposit</a>
+                <a class="btn btn-action" href="{{ url_for('playerbp.withdraw_get') }}?game_id={{ g.id }}">Withdraw</a>
+                <form method="post" action="{{ url_for('playerbp.request_game_account', game_id=g.id) }}" style="display:contents">
+                  <button class="btn btn-action btn-primary" type="submit">Request ID</button>
+                </form>
+              {% else %}
+                <a class="btn btn-action" href="{{ url_for('auth.login_get') }}">Deposit</a>
+                <a class="btn btn-action" href="{{ url_for('auth.login_get') }}">Withdraw</a>
+                <a class="btn btn-action btn-primary" href="{{ url_for('auth.register_get') }}">Request ID</a>
+              {% endif %}
+            </div>
+          </article>
+        {% else %}
+          <div class="muted">No games available yet. Please check back soon.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+  </section>
+</div>
+{% endblock %}

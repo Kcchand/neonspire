@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">Games</h1>
+<p class="muted">Download and tap “Request Account” to receive credentials instantly after verification.</p>
+
+<div class="game-grid mt12">
+  {% for g in games %}
+  <div class="game-card">
+    <div class="gc-top">
+      <div class="gc-icon">
+        {% if g.icon_url %}<img src="{{ g.icon_url }}" alt="{{ g.name }}">
+        {% else %}<div class="icon-ph"></div>{% endif %}
+      </div>
+      <div class="gc-info">
+        <div class="gc-name">{{ g.name }}</div>
+        <div class="gc-desc">{{ g.description or "Download and play." }}</div>
+      </div>
+      <a class="btn btn-mini" target="_blank" href="{{ g.download_url }}">Download</a>
+    </div>
+    <div class="gc-bottom">
+      <form method="post" action="{{ url_for('playerbp.request_game_account', game_id=g.id) }}">
+        <button class="btn btn-primary">Request Account</button>
+      </form>
+      <div class="gc-actions">
+        <a class="btn btn-ghost" href="{{ url_for('playerbp.deposit_get', game_id=g.id) }}">Submit Deposit</a>
+        <a class="btn btn-ghost" href="{{ url_for('dash.player') }}#withdraw">Withdraw</a>
+      </div>
+    </div>
+  </div>
+  {% else %}
+    <div class="empty">No games yet.</div>
+  {% endfor %}
+</div>
+{% endblock %}

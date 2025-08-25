@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>💸 Manual cash‑out: enter totals below</span>
+    {% if settings %}
+      <span>🧮 Limits: min {{ settings.min_redeem or 0 }} • max {{ settings.max_redeem or 0 }}</span>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Request Withdrawal</div>
+      {% if settings %}
+        <div class="muted">Min: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>
+      {% endif %}
+    </div>
+
+    <!--
+      Manual flow:
+      - Player enters Total Amount
+      - Optionally enters Keep in Game + Tip for Employee
+      - We calculate Cash Out = Total - Keep - Tip (never negative)
+      - We POST:
+          * amount          -> cash out amount (used by WithdrawRequest.amount)
+          * total_amount    -> original total (for employee’s context)
+          * keep_amount     -> kept in game (for employee’s context)
+          * tip_amount      -> tip for employee (for employee’s context)
+          * method, address, game_id
+      - No wallet math is performed server-side.
+    -->
+    <form id="withdrawForm" class="form-grid" method="post" action="{{ url_for('playerbp.withdraw_post') }}">
+      <!-- Select game (optional) -->
+      <div class="form-group">
+        <label for="wdGame">Game (optional)</label>
+        <select id="wdGame" name="game_id"
+                style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
+          <option value="">— No specific game —</option>
+          {% for g in games %}
+            <option value="{{ g.id }}">{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Method -->
+      <div class="form-group">
+        <label for="wdMethod">Payout Method</label>
+        <select id="wdMethod" name="method"
+                style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
+          <option value="CRYPTO">Crypto</option>
+          <option value="CHIME">Chime</option>
+        </select>
+      </div>
+
+      <!-- Destination -->
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="wdAddress">Destination (wallet / handle)</label>
+        <input id="wdAddress" name="address" type="text" placeholder="e.g., BTC wallet address or @chimehandle">
+      </div>
+
+      <!-- Manual math -->
+      <div class="form-group">
+        <label for="totalAmount">Total Amount</label>
+        <input id="totalAmount" name="total_amount" type="number" min="1" step="1" placeholder="e.g., 200" required>
+      </div>
+
+      <div class="form-group">
+        <label for="keepAmount">Keep in Game</label>
+        <input id="keepAmount" name="keep_amount" type="number" min="0" step="1" placeholder="e.g., 50">
+      </div>
+
+      <div class="form-group">
+        <label for="tipAmount">Tip for Employee</label>
+        <input id="tipAmount" name="tip_amount" type="number" min="0" step="1" placeholder="e.g., 10">
+      </div>
+
+      <div class="form-group">
+        <label for="cashOut">Cash Out (auto)</label>
+        <input id="cashOut" type="number" min="0" step="1" placeholder="Calculated" readonly>
+      </div>
+
+      <!-- Hidden field that the server reads as the official withdrawal amount -->
+      <input type="hidden" id="amountHidden" name="amount" value="">
+
+      <div class="form-actions" style="grid-column:1/-1;display:flex;gap:10px;justify-content:flex-end">
+        <a class="btn btn-ghost" href="{{ url_for('index') }}">Back</a>
+        <button class="btn btn-primary" type="submit">Submit Withdrawal</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  (function () {
+    // Preselect a game if ?game_id=... was provided
+    const url = new URL(window.location.href);
+    const id = url.searchParams.get('game_id');
+    if (id) {
+      const sel = document.getElementById('wdGame');
+      if (sel) sel.value = id;
+    }
+
+    const total   = document.getElementById('totalAmount');
+    const keep    = document.getElementById('keepAmount');
+    const tip     = document.getElementById('tipAmount');
+    const cashOut = document.getElementById('cashOut');
+    const hidden  = document.getElementById('amountHidden');
+
+    function asInt(el){ return Math.max(0, parseInt(el.value || '0', 10) || 0); }
+
+    function recalc(){
+      const t = asInt(total);
+      const k = asInt(keep);
+      const tp = asInt(tip);
+      let out = t - k - tp;
+      if(out < 0) out = 0;
+      cashOut.value = out;
+      hidden.value  = out;
+    }
+
+    [total, keep, tip].forEach(el => {
+      el.addEventListener('input', recalc);
+      el.addEventListener('change', recalc);
+    });
+
+    // Initial compute
+    recalc();
+  })();
+</script>
+{% endblock %}

@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="hero" style="padding-bottom:0">
+  <div class="hero__title">Create your account</div>
+  <div class="hero__subtitle">One profile for all games and wallets.</div>
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  /* Same scoped styles as login for visual parity */
+  .auth-wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}
+  .auth-card{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
+             border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px;
+             box-shadow:0 14px 40px rgba(0,0,0,.35)}
+  .auth-side{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
+             border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px}
+  .auth-title{font-size:26px;margin:0 0 2px 0}
+  .auth-sub{color:#9aa3c2;margin:0 0 14px 0}
+  .fg{display:grid;gap:8px;margin-bottom:12px}
+  .fg label{color:#9aa3c2;font-size:13px}
+  .fg input{background:#11162a;border:1px solid rgba(255,255,255,.1);color:#e7ecff;
+            padding:12px;border-radius:12px;outline:none}
+  .fg input:focus{border-color:rgba(18,217,161,.45);box-shadow:0 0 0 6px rgba(18,217,161,.08)}
+  .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+  .muted{color:#9aa3c2}
+  .btn-wide{width:100%;font-weight:700}
+  .list{margin:8px 0 0 0;padding:0}
+  .list li{list-style:none;display:flex;gap:10px;align-items:flex-start;margin:8px 0}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
+         font-size:12px;border:1px solid rgba(255,255,255,.12)}
+  .badge-primary{background:linear-gradient(180deg,#12d9a1,#0fb98a);color:#041813;border:none}
+  @media (max-width:900px){.auth-wrap{grid-template-columns:1fr}}
+</style>
+
+<div class="auth-wrap">
+  <!-- Left: Register form -->
+  <div class="auth-card">
+    <h1 class="auth-title">Create Account</h1>
+    <p class="auth-sub">Join and start playing in minutes.</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="grid">
+          {% for category, message in messages %}
+            <div class="card" style="border-color:
+              {% if category == 'success' %}rgba(18,217,161,.45)
+              {% elif category == 'error' %}rgba(255,93,93,.5)
+              {% else %}rgba(255,255,255,.12){% endif %}; background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));">
+              {{ message }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <form method="post" action="{{ url_for('auth.register_post') }}" class="auth-form">
+      <div class="fg">
+        <label for="name">Full Name</label>
+        <input id="name" name="name" type="text" placeholder="Jane Player" required>
+      </div>
+
+      <div class="fg">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" placeholder="you@example.com" required>
+      </div>
+
+      <div class="fg">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" placeholder="Create a strong password" required>
+      </div>
+
+      <button class="btn btn-primary btn-wide" type="submit">Create Account</button>
+    </form>
+
+    <p class="muted" style="margin-top:12px">Already have an account?
+      <a href="{{ url_for('auth.login_get') }}" style="color:#12d9a1;text-decoration:none">Sign in</a>
+    </p>
+  </div>
+
+  <!-- Right: Highlights -->
+  <aside class="auth-side">
+    <div class="badge badge-primary">Welcome Package</div>
+    <h3 style="margin:12px 0 6px 0">What you get</h3>
+    <ul class="list">
+      <li>🎮 One account for all games</li>
+      <li>💳 Seamless wallet & fast credits</li>
+      <li>🔔 Instant notifications on approvals</li>
+      <li>📲 Mobile‑first, desktop‑perfect UI</li>
+    </ul>
+
+    <div class="card card-glass" style="margin-top:12px">
+      <div class="h4">Already registered?</div>
+      <div class="muted">Jump right back in.</div>
+      <a class="btn btn-ghost" style="margin-top:10px" href="{{ url_for('auth.login_get') }}">Go to Sign In</a>
+    </div>
+  </aside>
+</div>
+{% endblock %}

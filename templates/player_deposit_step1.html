@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>💰 Step 1 — Enter amount & choose method</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Deposit — Step 1</div>
+    </div>
+
+    <form class="form-grid" method="post" action="{{ url_for('playerbp.deposit_step1_post') }}">
+      <div class="form-group">
+        <label for="depAmount">Amount</label>
+        <input id="depAmount" name="amount" type="number" min="1" placeholder="Enter amount" required>
+      </div>
+
+      <div class="form-group">
+        <label for="depMethod">Method</label>
+        <select id="depMethod" name="method"
+                style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
+          <option value="CRYPTO">Crypto</option>
+          <option value="CHIME">Chime</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="depGame">Game (optional)</label>
+        <select id="depGame" name="game_id"
+                style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
+          <option value="">— No specific game —</option>
+          {% for g in games %}
+            <option value="{{ g.id }}" {% if preselect_game_id and preselect_game_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-actions" style="grid-column:1/-1;display:flex;gap:10px;justify-content:flex-end">
+        <a class="btn btn-ghost" href="{{ url_for('index') }}">Cancel</a>
+        <button class="btn btn-primary" type="submit">Next</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>🔑 Your game credentials are shown here once staff provides them</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+
+  <!-- Accounts -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">My Game Logins</div>
+      <div class="muted">Credentials provided by staff</div>
+    </div>
+
+    <div class="table">
+      <div class="t-head">
+        <div>Game</div>
+        <div>Username</div>
+        <div>Password</div>
+        <div>Note / Status</div>
+      </div>
+
+      {% if accounts %}
+        {% for a in accounts %}
+          <div class="t-row">
+            <div>{{ a.game }}</div>
+            <div>{{ a.username or "—" }}</div>
+            <div>{{ a.password or "—" }}</div>
+            <div>{{ a.note or "—" }}</div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty muted">No credentials yet.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Requests -->
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head">
+      <div class="h3">Access Requests</div>
+      <div class="muted">Current and recent</div>
+    </div>
+
+    <div class="table">
+      <div class="t-head">
+        <div>Game</div>
+        <div>Status</div>
+        <div class="t-right">Requested</div>
+      </div>
+
+      {% if requests %}
+        {% for r in requests %}
+          <div class="t-row">
+            <div>{{ r.game }}</div>
+            <div>
+              {% set s = (r.status or 'PENDING').upper() %}
+              {% if s == 'APPROVED' %}
+                <span class="chip">✅ Approved</span>
+              {% elif s == 'IN_PROGRESS' %}
+                <span class="chip">⏳ In progress</span>
+              {% elif s == 'REJECTED' %}
+                <span class="chip">❌ Rejected</span>
+              {% else %}
+                <span class="chip">🧑‍💻 Pending</span>
+              {% endif %}
+            </div>
+            <div class="t-right">
+              {{ r.created_at.strftime('%b %d, %Y %H:%M') if r.created_at else '—' }}
+            </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty muted">No requests yet.</div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}
