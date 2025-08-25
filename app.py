@@ -28,8 +28,15 @@ except Exception:
 
 load_dotenv()
 
-# Socket.IO instance (eventlet mode). init_app happens inside create_app()
-socketio = SocketIO(async_mode="eventlet", cors_allowed_origins="*")
+# ------------------------------------------------------------------
+# Socket.IO instance
+# Default to "threading" so it works on Python 3.13 (no eventlet/gevent).
+# Later, when Render uses Python 3.11 and you want eventlet, set:
+#   ASYNC_MODE=eventlet
+# and use an eventlet worker start command.
+# ------------------------------------------------------------------
+ASYNC_MODE = os.getenv("ASYNC_MODE", "threading").strip().lower()
+socketio = SocketIO(async_mode=ASYNC_MODE, cors_allowed_origins="*")
 
 
 def create_app():
@@ -314,5 +321,5 @@ app = create_app()
 
 # -------- local development entry (Render won't use this block) --------
 if __name__ == "__main__":
-    # Run with Socket.IO (eventlet) locally
+    # Run with Socket.IO locally, respecting ASYNC_MODE (threading/eventlet)
     socketio.run(app, host="127.0.0.1", port=5000, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
