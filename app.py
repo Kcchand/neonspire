@@ -31,9 +31,8 @@ load_dotenv()
 # ------------------------------------------------------------------
 # Socket.IO instance
 # Default to "threading" so it works on Python 3.13 (no eventlet/gevent).
-# Later, when Render uses Python 3.11 and you want eventlet, set:
-#   ASYNC_MODE=eventlet
-# and use an eventlet worker start command.
+# Later, if you switch this service to Python 3.11, set ASYNC_MODE=eventlet
+# and change Gunicorn worker accordingly (see notes below).
 # ------------------------------------------------------------------
 ASYNC_MODE = os.getenv("ASYNC_MODE", "threading").strip().lower()
 socketio = SocketIO(async_mode=ASYNC_MODE, cors_allowed_origins="*")
@@ -45,15 +44,11 @@ def create_app():
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///casino.db")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # DB
     db.init_app(app)
-
-    # Socket.IO (bind to this app)
     socketio.init_app(app)
 
     # ------------------ tiny kv fallback (shared) ------------------
     def _ensure_kv():
-        """Create a simple key–value table if it doesn't exist."""
         try:
             bind = db.session.get_bind()
             dialect = bind.dialect.name if bind else "sqlite"
@@ -99,7 +94,6 @@ def create_app():
         return default
 
     def _first_attr(obj, *names, default=None):
-        """Return the first non-empty attribute if it exists on obj."""
         for n in names:
             if hasattr(obj, n):
                 val = getattr(obj, n)
@@ -107,7 +101,6 @@ def create_app():
                     return val
         return default
 
-    # alias sets for tolerant reads (match admin/player code paths)
     PROMO1_ALIASES = ("promo_line1", "news_line1", "ticker_line1", "headline1", "news1")
     PROMO2_ALIASES = ("promo_line2", "news_line2", "ticker_line2", "headline2", "news2")
     TREND_ALIASES  = ("trending_game_ids", "trending_ids", "trending_csv", "trending")
@@ -124,16 +117,13 @@ def create_app():
     # ------------------ globals for templates ------------------
     @app.context_processor
     def inject_globals():
-        # unread notifications
         if current_user.is_authenticated:
             cnt = Notification.query.filter_by(user_id=current_user.id, is_read=False).count()
         else:
             cnt = 0
 
-        # one-row settings (if missing, other code uses kv fallback)
         settings = db.session.get(PaymentSettings, 1)
 
-        # ensure wallet exists for signed-in users
         wallet = None
         if current_user.is_authenticated:
             wallet = PlayerBalance.query.filter_by(user_id=current_user.id).first()
@@ -159,32 +149,24 @@ def create_app():
     def health():
         return {"ok": True, "service": "web", "env": os.getenv("NODE_ENV", "production")}
 
-    # ------------------ Home / Lobby (ONE PAGE) ------------------
+    # ------------------ Home / Lobby ------------------
     @app.route("/")
     @app.route("/lobby")
     def index():
-        """
-        Same lobby for guests and signed-in users.
-        - News/promo banner + bonus % from PaymentSettings OR kv_store fallback
-        - Today's Trending from saved id CSV (order preserved)
-        """
-        # active games (for catalog grid)
         games = Game.query.filter_by(is_active=True).order_by(
             Game.created_at.desc() if hasattr(Game, "created_at") else Game.id.desc()
         ).all()
 
         settings = db.session.get(PaymentSettings, 1)
 
-        # -------- news / promo (aliases + kv fallback) --------
-        promo_line1 = _first_attr(settings, *PROMO1_ALIASES, default=None) or _kv_first(*PROMO1_ALIASES, default="")
-        promo_line2 = _first_attr(settings, *PROMO2_ALIASES, default=None) or _kv_first(*PROMO2_ALIASES, default="")
+        promo_line1 = _first_attr(settings, *PROMO1_ALIASES) or _kv_first(*PROMO1_ALIASES, default="")
+        promo_line2 = _first_attr(settings, *PROMO2_ALIASES) or _kv_first(*PROMO2_ALIASES, default="")
         bonus_percent = getattr(settings, "bonus_percent", None)
         if bonus_percent in (None, ""):
             bp = _kv_first("bonus_percent")
             bonus_percent = int(bp) if (bp and str(bp).isdigit()) else 0
 
-        # -------- trending (aliases + kv fallback; preserve saved order) -------
-        raw_csv = _first_attr(settings, *TREND_ALIASES, default=None)
+        raw_csv = _first_attr(settings, *TREND_ALIASES)
         if raw_csv in (None, ""):
             raw_csv = _kv_first(*TREND_ALIASES, default="") or ""
         trending_ids = []
@@ -203,7 +185,6 @@ def create_app():
                 if gid in by_id:
                     trending_games.append(by_id[gid])
 
-        # -------- render (guest vs signed-in) --------
         if not current_user.is_authenticated:
             return render_template(
                 "index.html",
@@ -217,7 +198,6 @@ def create_app():
                 page_title="NeonSpire Casino",
             )
 
-        # signed-in extras
         wallet = PlayerBalance.query.filter_by(user_id=current_user.id).first()
         if not wallet:
             wallet = PlayerBalance(user_id=current_user.id, balance=0)
@@ -254,25 +234,15 @@ def create_app():
             page_title="NeonSpire Casino",
         )
 
-    # ------------------ error pages ------------------
-    @app.errorhandler(403)
-    def forbidden(_e):
-        return render_template("base.html", error="403 Forbidden", page_title="Forbidden"), 403
-
-    @app.errorhandler(404)
-    def not_found(_e):
-        return render_template("base.html", error="404 Not Found", page_title="Not Found"), 404
-
-    @app.errorhandler(500)
-    def server_error(_e):
-        return render_template("base.html", error="500 Internal Server Error", page_title="Server Error"), 500
+    # ------------------ Socket.IO sample ------------------
+    @socketio.on("connect")
+    def _on_connect():
+        emit("welcome", {"msg": f"Connected (async={ASYNC_MODE})"})
 
     # ------------------ first run bootstrap ------------------
     with app.app_context():
         db.create_all()
-        _ensure_kv()  # make sure kv_store exists so admin/guest ticker works Day 1
-
-        # --- one-time schema patch: add games.backend_url if missing ---
+        _ensure_kv()
         try:
             insp = sqla_inspect(db.engine)
             game_cols = {c["name"] for c in insp.get_columns("games")}
@@ -283,7 +253,7 @@ def create_app():
                     db.session.execute(text("ALTER TABLE games ADD COLUMN IF NOT EXISTS backend_url VARCHAR(500)"))
                 elif dialect in ("mysql", "mariadb"):
                     db.session.execute(text("ALTER TABLE games ADD COLUMN backend_url VARCHAR(500) NULL"))
-                else:  # sqlite and others
+                else:
                     db.session.execute(text("ALTER TABLE games ADD COLUMN backend_url VARCHAR(500)"))
                 db.session.commit()
                 print("✅ Added games.backend_url column")
@@ -293,16 +263,10 @@ def create_app():
 
         seed_admin()
 
-    # ------------------ Socket.IO sample handlers ------------------
-    @socketio.on("connect")
-    def _on_connect():
-        emit("welcome", {"msg": "Connected to live chat"})
-
     return app
 
 
 def seed_admin():
-    """Create the .env-configured admin if missing."""
     email = os.getenv("ADMIN_EMAIL")
     password = os.getenv("ADMIN_PASSWORD")
     if not email or not password:
@@ -315,11 +279,9 @@ def seed_admin():
         print("✅ Admin user created from .env")
 
 
-# -------- module-level app for gunicorn (app:app) --------
+# module-level app for gunicorn (app:app)
 app = create_app()
 
-
-# -------- local development entry (Render won't use this block) --------
 if __name__ == "__main__":
-    # Run with Socket.IO locally, respecting ASYNC_MODE (threading/eventlet)
+    # Local dev: uses whatever ASYNC_MODE you set (default threading)
     socketio.run(app, host="127.0.0.1", port=5000, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
