@@ -9,7 +9,6 @@
 
 {% block content %}
 <style>
-  /* Same scoped styles as login for visual parity */
   .auth-wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}
   .auth-card{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
              border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px;
@@ -23,7 +22,6 @@
   .fg input{background:#11162a;border:1px solid rgba(255,255,255,.1);color:#e7ecff;
             padding:12px;border-radius:12px;outline:none}
   .fg input:focus{border-color:rgba(18,217,161,.45);box-shadow:0 0 0 6px rgba(18,217,161,.08)}
-  .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
   .muted{color:#9aa3c2}
   .btn-wide{width:100%;font-weight:700}
   .list{margin:8px 0 0 0;padding:0}
@@ -47,7 +45,8 @@
             <div class="card" style="border-color:
               {% if category == 'success' %}rgba(18,217,161,.45)
               {% elif category == 'error' %}rgba(255,93,93,.5)
-              {% else %}rgba(255,255,255,.12){% endif %}; background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));">
+              {% else %}rgba(255,255,255,.12){% endif %};
+              background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));">
               {{ message }}
             </div>
           {% endfor %}
@@ -55,7 +54,7 @@
       {% endif %}
     {% endwith %}
 
-    <form method="post" action="{{ url_for('auth.register_post') }}" class="auth-form">
+    <form id="registerForm" method="post" action="{{ url_for('auth.register_post') }}" class="auth-form">
       <div class="fg">
         <label for="name">Full Name</label>
         <input id="name" name="name" type="text" placeholder="Jane Player" required>
@@ -67,8 +66,18 @@
       </div>
 
       <div class="fg">
+        <label for="mobile">Mobile Number</label>
+        <input id="mobile" name="mobile" type="tel" placeholder="+1 555 123 4567" required>
+      </div>
+
+      <div class="fg">
         <label for="password">Password</label>
         <input id="password" name="password" type="password" placeholder="Create a strong password" required>
+      </div>
+
+      <div class="fg">
+        <label for="confirm_password">Confirm Password</label>
+        <input id="confirm_password" name="confirm_password" type="password" placeholder="Re-enter your password" required>
       </div>
 
       <button class="btn btn-primary btn-wide" type="submit">Create Account</button>
@@ -81,14 +90,29 @@
 
   <!-- Right: Highlights -->
   <aside class="auth-side">
-    <div class="badge badge-primary">Welcome Package</div>
+    <div class="badge badge-primary">Welcome to NeonSpire Casino</div>
     <h3 style="margin:12px 0 6px 0">What you get</h3>
     <ul class="list">
-      <li>🎮 One account for all games</li>
-      <li>💳 Seamless wallet & fast credits</li>
+      <li>⚡ Easy & automatic account setup</li>
+      <li>💳 100% secure & fast credits</li>
       <li>🔔 Instant notifications on approvals</li>
-      <li>📲 Mobile‑first, desktop‑perfect UI</li>
+      <li>📲 Mobile-friendly experience</li>
     </ul>
+
+    <div style="
+      margin-top:12px;
+      display:block;
+      width:100%;
+      text-align:center;
+      background:linear-gradient(180deg,var(--brand),var(--brand-2));
+      color:#05281b;
+      font-weight:900;
+      padding:12px 14px;
+      border-radius:14px;
+      box-shadow:0 8px 24px rgba(25,225,165,.28);
+    ">
+      🎁 Join us now and get exciting bonuses
+    </div>
 
     <div class="card card-glass" style="margin-top:12px">
       <div class="h4">Already registered?</div>
@@ -97,4 +121,16 @@
     </div>
   </aside>
 </div>
+
+<script>
+document.getElementById("registerForm").addEventListener("submit", function(e){
+  const pass = document.getElementById("password").value.trim();
+  const confirm = document.getElementById("confirm_password").value.trim();
+  if(pass !== confirm){
+    e.preventDefault();
+    alert("❌ Passwords do not match. Please re-enter.");
+    return false;
+  }
+});
+</script>
 {% endblock %}

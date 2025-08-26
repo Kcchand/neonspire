@@ -37,52 +37,16 @@
   overflow:hidden;
   box-shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.18);
 }
-.news-inner{
-  position:relative;
-  white-space:nowrap;
-  overflow:hidden;
-  padding:10px 0;
-}
-.news-track{
-  display:inline-block;
-  will-change: transform;
-  animation: news-marquee var(--marquee-duration, 20s) linear infinite;
-}
-.news-item{
-  display:inline-flex;
-  align-items:center;
-  gap:.35rem;
-  padding:0 .75rem;
-  font-weight:700;
-  letter-spacing:.2px;
-}
-.news-sep{
-  opacity:.55;
-  padding:0 .35rem;
-}
-.news-mask{
-  position:absolute;
-  top:0; bottom:0;
-  width:60px;
-  pointer-events:none;
-  z-index:1;
-  background: linear-gradient(to right, rgba(18,20,25,1) 0%, rgba(18,20,25,0) 100%);
-}
+.news-inner{ position:relative; white-space:nowrap; overflow:hidden; padding:10px 0; }
+.news-track{ display:inline-block; will-change: transform; animation: news-marquee var(--marquee-duration, 20s) linear infinite; }
+.news-item{ display:inline-flex; align-items:center; gap:.35rem; padding:0 .75rem; font-weight:700; letter-spacing:.2px; }
+.news-sep{ opacity:.55; padding:0 .35rem; }
+.news-mask{ position:absolute; top:0; bottom:0; width:60px; pointer-events:none; z-index:1; background: linear-gradient(to right, rgba(18,20,25,1) 0%, rgba(18,20,25,0) 100%); }
 .news-mask--right{ right:0; transform: scaleX(-1); }
 .news-mask--left{ left:0; }
-
-@keyframes news-marquee{
-  0%   { transform: translateX(0); }
-  100% { transform: translateX(var(--marquee-distance, -50%)); }
-}
-
-/* Pause on hover */
+@keyframes news-marquee{ 0%{ transform: translateX(0); } 100%{ transform: translateX(var(--marquee-distance, -50%)); } }
 .news-ticker:hover .news-track{ animation-play-state: paused; }
-
-/* Reduced motion support */
-@media (prefers-reduced-motion: reduce){
-  .news-track{ animation: none; }
-}
+@media (prefers-reduced-motion: reduce){ .news-track{ animation: none; } }
 </style>
 
 <script>
@@ -168,22 +132,21 @@ document.addEventListener("DOMContentLoaded", () => {
       {% endif %}
     </div>
 
-    {# ===== Live Chat card removed per request ===== #}
-
     <!-- Contact Us -->
     <div class="rail-card" id="contact">
       <div class="rail-title">Contact Us</div>
 
-      {% set wa = settings.whatsapp_url if settings and settings.whatsapp_url else '#' %}
-      {% set tg = settings.telegram_url if settings and settings.telegram_url else '#' %}
-      {% set fb = settings.facebook_url if settings and settings.facebook_url else '#' %}
-      {% set ig = settings.instagram_url if settings and settings.instagram_url else '#' %}
+      {# Use settings.* if provided, else fallback to the known URLs #}
+      {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/1234567890') %}
+      {% set tg = (settings.telegram_url if settings and settings.telegram_url else 'https://t.me/yourusername') %}
+      {% set fb = (settings.facebook_url if settings and settings.facebook_url else 'https://www.facebook.com/neonspirecas') %}
+      {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/yourprofile') %}
 
       <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener">WhatsApp</a>
-        <a class="btn btn-mini btn-wide" href="{{ tg }}" target="_blank" rel="noopener">Telegram</a>
-        <a class="btn btn-mini btn-wide" href="{{ fb }}" target="_blank" rel="noopener">Facebook</a>
-        <a class="btn btn-mini btn-wide" href="{{ ig }}" target="_blank" rel="noopener">Instagram</a>
+        <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener noreferrer" data-external="1">WhatsApp</a>
+        <a class="btn btn-mini btn-wide" href="{{ tg }}" target="_blank" rel="noopener noreferrer" data-external="1">Telegram</a>
+        <a class="btn btn-mini btn-wide" href="{{ fb }}" target="_blank" rel="noopener noreferrer" data-external="1">Facebook</a>
+        <a class="btn btn-mini btn-wide" href="{{ ig }}" target="_blank" rel="noopener noreferrer" data-external="1">Instagram</a>
       </div>
 
       <div class="rail-sub" style="margin-top:8px">We’re available 24/7.</div>
@@ -203,7 +166,7 @@ document.addEventListener("DOMContentLoaded", () => {
   <!-- Main column -->
   <section>
 
-    <!-- Trending (chips only — no actions) -->
+    <!-- Trending -->
     <div class="panel">
       <div class="panel-head">
         <div class="h3">Today’s Trending</div>
@@ -273,4 +236,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
   </section>
 </div>
+
+{# ---- External link fail-safe: opens off-site links in a new tab even if a global handler cancels clicks ---- #}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  function isExternal(href) {
+    try {
+      const u = new URL(href, window.location.href);
+      return u.origin !== window.location.origin;
+    } catch { return false; }
+  }
+
+  document.querySelectorAll('a[data-external], a[target="_blank"]').forEach(function (a) {
+    if (!isExternal(a.href)) return; // ignore internal links
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopImmediatePropagation();   // bypass any global .btn handlers
+      try { window.open(a.href, '_blank', 'noopener'); }
+      catch (_) { window.location.href = a.href; }
+      return false;
+    }, { capture: true });
+  });
+});
+</script>
 {% endblock %}
