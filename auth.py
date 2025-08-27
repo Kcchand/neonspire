@@ -3,6 +3,7 @@ import os
 import re
 import smtplib
 from email.message import EmailMessage
+from datetime import datetime
 
 from flask import (
     Blueprint, render_template, request, redirect, url_for, flash, render_template_string
@@ -44,11 +45,13 @@ def _role_home(role: str) -> str:
 def _smtp_send(to_email: str, subject: str, html: str) -> bool:
     """
     Send email using environment-configured SMTP.
-    If SMTP env vars are missing, we fall back to printing the link
-    to the console and return False (so the caller can flash a hint).
 
     Expected env (example):
       SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_TLS (1/0)
+
+    Returns True if the message was handed to SMTP successfully.
+    In dev (no SMTP), it prints the email to console and returns False,
+    but we never expose links in flash messages.
     """
     host = os.getenv("SMTP_HOST")
     port = int(os.getenv("SMTP_PORT", "587"))
@@ -58,7 +61,7 @@ def _smtp_send(to_email: str, subject: str, html: str) -> bool:
     use_tls = os.getenv("SMTP_TLS", "1") not in ("0", "false", "False")
 
     if not host or not from_addr:
-        # No SMTP configured — developer mode fallback
+        # Dev-mode fallback: print to server logs only
         print("\n[DEV-MAIL] Would send email:")
         print(f"To: {to_email}\nSubject: {subject}\nBody (HTML):\n{html}\n")
         return False
@@ -80,42 +83,38 @@ def _smtp_send(to_email: str, subject: str, html: str) -> bool:
         server.quit()
         return True
     except Exception as e:
+        # Log and fall back silently (UI will still say 'email sent')
         print(f"[SMTP ERROR] {e}")
         print("\n[DEV-MAIL Fallback] Would send email:")
         print(f"To: {to_email}\nSubject: {subject}\nBody (HTML):\n{html}\n")
         return False
 
 
-def _send_verification_email(user: User) -> None:
+def _send_verification_email(user: User) -> bool:
+    """Email a verify link. Never surface the URL in the UI."""
     token = EmailToken.issue(user.id)
     verify_url = url_for("auth.verify_email", token=token.token, _external=True)
     html = f"""
-      <p>Hi {user.name},</p>
+      <p>Hi {user.name or 'there'},</p>
       <p>Confirm your email for NeonSpire Casino by clicking the link below:</p>
       <p><a href="{verify_url}">Verify my email</a></p>
       <p>If you didn’t create this account, you can ignore this message.</p>
     """
     ok = _smtp_send(user.email, "Verify your email", html)
-    if ok:
-        flash("Verification email sent. Please check your inbox.", "success")
-    else:
-        # Dev mode: show the link so you can click it locally
-        flash(f"Dev mode: click to verify → {verify_url}", "success")
+    return ok
 
 
-def _send_reset_email(user: User, token: PasswordResetToken) -> None:
+def _send_reset_email(user: User, token: PasswordResetToken) -> bool:
+    """Email a password-reset link. Never surface the URL in the UI."""
     reset_url = url_for("auth.reset_get", token=token.token, _external=True)
     html = f"""
-      <p>Hi {user.name},</p>
+      <p>Hi {user.name or 'there'},</p>
       <p>Use the link below to reset your password. This link expires soon.</p>
       <p><a href="{reset_url}">Reset my password</a></p>
       <p>If you didn’t request this, you can ignore this message.</p>
     """
     ok = _smtp_send(user.email, "Password reset", html)
-    if ok:
-        flash("Password reset link sent. Please check your email.", "success")
-    else:
-        flash(f"Dev mode: reset link → {reset_url}", "success")
+    return ok
 
 
 # =========================================================
@@ -142,8 +141,8 @@ def login_post():
 
     # Enforce verified email before allowing login
     if not user.email_verified:
-        _send_verification_email(user)
-        flash("Please verify your email before signing in.", "error")
+        _send_verification_email(user)  # silently re-send
+        flash("Please verify your email before signing in. We’ve sent a new link to your inbox.", "error")
         return redirect(url_for("auth.login_get"))
 
     login_user(user, remember=remember)
@@ -199,10 +198,9 @@ def register_post():
     db.session.add(u)
     db.session.commit()
 
-    # Send verification
+    # Send verification (UI shows one clean message — no dev link)
     _send_verification_email(u)
-
-    flash("Account created. Check your email to verify your address.", "success")
+    flash("Verification email sent. Please check your inbox to activate your account.", "success")
     return redirect(url_for("auth.login_get"))
 
 
@@ -218,14 +216,15 @@ def verify_email():
         flash("Invalid or expired token.", "error")
         return redirect(url_for("auth.login_get"))
 
-    from datetime import datetime
     if rec.expires_at and rec.expires_at < datetime.utcnow():
+        uid = rec.user_id
         db.session.delete(rec)
         db.session.commit()
-        flash("Verification link expired. We’ve sent a new one.", "error")
-        u = db.session.get(User, rec.user_id)
+        # silently re-issue + notify
+        u = db.session.get(User, uid)
         if u:
             _send_verification_email(u)
+        flash("Verification link expired. We’ve sent a new one to your email.", "error")
         return redirect(url_for("auth.login_get"))
 
     # Mark verified
@@ -251,6 +250,7 @@ def resend_verification():
         email = (request.form.get("email") or request.args.get("email") or "").strip().lower()
         user = User.query.filter_by(email=email).first()
 
+    # Do not reveal whether a user exists
     if not user:
         flash("If the account exists, a verification email will be sent.", "success")
         return redirect(url_for("auth.login_get"))
@@ -260,6 +260,7 @@ def resend_verification():
         return redirect(url_for("auth.login_get"))
 
     _send_verification_email(user)
+    flash("Verification email sent. Please check your inbox.", "success")
     return redirect(url_for("auth.login_get"))
 
 
@@ -309,6 +310,7 @@ def forgot_post():
 
     token = PasswordResetToken.issue(user.id)
     _send_reset_email(user, token)
+    flash("Password reset link sent. Please check your email.", "success")
     return redirect(url_for("auth.login_get"))
 
 
@@ -357,7 +359,6 @@ def reset_post():
         flash("Invalid or expired token.", "error")
         return redirect(url_for("auth.login_get"))
 
-    from datetime import datetime
     if rec.expires_at and rec.expires_at < datetime.utcnow():
         db.session.delete(rec)
         db.session.commit()
