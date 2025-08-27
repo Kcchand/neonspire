@@ -3,6 +3,8 @@
 <div class="card card-glass">
   <div class="between">
     <h1 class="h1">Deposits</h1>
+
+    {# Optional filter bar (safe even if status/q aren't provided) #}
     <form method="get" class="inline-form">
       <select name="status" class="input">
         {% for st in ['PENDING','RECEIVED','LOADED','REJECTED'] %}
@@ -14,34 +16,142 @@
     </form>
   </div>
 
-  <table class="tbl mt12">
-    <thead>
-      <tr>
-        <th>ID</th><th>User</th><th>Amount</th><th>Status</th><th>Updated</th><th>Action</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for d in items %}
-      <tr>
-        <td class="mono">#{{ d.id }}</td>
-        <td class="mono">{{ d.user_id }}</td>
-        <td>{{ d.amount }}</td>
-        <td>{{ d.status }}</td>
-        <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
-        <td>
-          <form method="post" action="{{ url_for('employeebp.deposit_mark', dep_id=d.id) }}" class="row gap8">
-            <button class="btn btn-ghost" name="action" value="received" {% if d.status!='PENDING' %}disabled{% endif %}>Mark Received</button>
-            <button class="btn btn-primary" name="action" value="load" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
-              Load (+{{ (s.bonus_percent if s else 0) or 0 }}%)
-            </button>
-            <button class="btn btn-ghost" name="action" value="reject" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
-          </form>
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="6" class="muted">No items.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {# Prefer a unified 'items' list if provided. Otherwise render Pending + Recent sections. #}
+  {% set bonus = (settings.bonus_percent if settings else 0) %}
+
+  {% if items is defined %}
+    <table class="tbl mt12">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User</th>
+          <th>Amount</th>
+          <th>Method</th>
+          <th>Status</th>
+          <th>Updated</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in items %}
+          {% set u = (users.get(d.user_id) if users is defined else None) %}
+          {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+          <tr>
+            <td class="mono">#{{ d.id }}</td>
+            <td>
+              {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
+              {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
+            </td>
+            <td>{{ d.amount }}</td>
+            <td>{{ d.method }}</td>
+            <td>{{ d.status }}</td>
+            <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="row gap8">
+              <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+              <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                  Approve & Load (+{{ bonus or 0 }}%)
+                </button>
+              </form>
+              <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="muted">No items.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+  {% else %}
+    {# --------- Section: Pending --------- #}
+    <h3 class="h3 mt16">Pending</h3>
+    <table class="tbl mt8">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User</th>
+          <th>Amount</th>
+          <th>Method</th>
+          <th>Created</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in pending %}
+          {% set u = (users.get(d.user_id) if users is defined else None) %}
+          {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+          <tr>
+            <td class="mono">#{{ d.id }}</td>
+            <td>
+              {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
+              {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
+            </td>
+            <td>{{ d.amount }}</td>
+            <td>{{ d.method }}</td>
+            <td class="mono">{{ (d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="row gap8">
+              <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+              <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                <button class="btn btn-primary">Approve & Load (+{{ bonus or 0 }}%)</button>
+              </form>
+              <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                <button class="btn btn-ghost">Reject</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="muted">No pending deposits.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {# --------- Section: Recent (non-pending) --------- #}
+    <h3 class="h3 mt24">Recent</h3>
+    <table class="tbl mt8">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User</th>
+          <th>Amount</th>
+          <th>Method</th>
+          <th>Status</th>
+          <th>Updated</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in recent %}
+          {% set u = (users.get(d.user_id) if users is defined else None) %}
+          {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+          <tr>
+            <td class="mono">#{{ d.id }}</td>
+            <td>
+              {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
+              {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
+            </td>
+            <td>{{ d.amount }}</td>
+            <td>{{ d.method }}</td>
+            <td>{{ d.status }}</td>
+            <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="row gap8">
+              <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+              <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                  Approve & Load (+{{ bonus or 0 }}%)
+                </button>
+              </form>
+              <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="muted">No recent items.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
 </div>
 {% endblock %}

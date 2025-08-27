@@ -1,15 +1,23 @@
 # auth.py
+import os
 import re
-from urllib.parse import urlparse
+import smtplib
+from email.message import EmailMessage
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import (
+    Blueprint, render_template, request, redirect, url_for, flash, render_template_string
+)
 from flask_login import login_user, logout_user, current_user, login_required
 
-from models import db, User
+from models import (
+    db, User, EmailToken, PasswordResetToken
+)
 
 auth_bp = Blueprint("auth", __name__)
 
-# ---------- helpers ----------
+# =========================================================
+# Helpers
+# =========================================================
 
 def _is_safe_next(next_url: str) -> bool:
     """
@@ -25,26 +33,98 @@ def _is_safe_next(next_url: str) -> bool:
 
 
 def _role_home(role: str) -> str:
-    """
-    Default landing per role.
-    ADMIN    -> admin console
-    EMPLOYEE -> employee desk
-    PLAYER   -> home (player lobby lives on '/')
-    """
+    """Default landing per role."""
     if role == "ADMIN":
         return url_for("adminbp.admin_home")
     if role == "EMPLOYEE":
         return url_for("employeebp.employee_home")
-    # PLAYER or anything else
     return url_for("index")
 
 
-# ---------- routes ----------
+def _smtp_send(to_email: str, subject: str, html: str) -> bool:
+    """
+    Send email using environment-configured SMTP.
+    If SMTP env vars are missing, we fall back to printing the link
+    to the console and return False (so the caller can flash a hint).
+
+    Expected env (example):
+      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_TLS (1/0)
+    """
+    host = os.getenv("SMTP_HOST")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER")
+    pw   = os.getenv("SMTP_PASS")
+    from_addr = os.getenv("SMTP_FROM", user or "no-reply@localhost")
+    use_tls = os.getenv("SMTP_TLS", "1") not in ("0", "false", "False")
+
+    if not host or not from_addr:
+        # No SMTP configured — developer mode fallback
+        print("\n[DEV-MAIL] Would send email:")
+        print(f"To: {to_email}\nSubject: {subject}\nBody (HTML):\n{html}\n")
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to_email
+    msg.set_content("This message requires an HTML-capable email client.")
+    msg.add_alternative(html, subtype="html")
+
+    try:
+        server = smtplib.SMTP(host, port)
+        if use_tls:
+            server.starttls()
+        if user and pw:
+            server.login(user, pw)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"[SMTP ERROR] {e}")
+        print("\n[DEV-MAIL Fallback] Would send email:")
+        print(f"To: {to_email}\nSubject: {subject}\nBody (HTML):\n{html}\n")
+        return False
+
+
+def _send_verification_email(user: User) -> None:
+    token = EmailToken.issue(user.id)
+    verify_url = url_for("auth.verify_email", token=token.token, _external=True)
+    html = f"""
+      <p>Hi {user.name},</p>
+      <p>Confirm your email for NeonSpire Casino by clicking the link below:</p>
+      <p><a href="{verify_url}">Verify my email</a></p>
+      <p>If you didn’t create this account, you can ignore this message.</p>
+    """
+    ok = _smtp_send(user.email, "Verify your email", html)
+    if ok:
+        flash("Verification email sent. Please check your inbox.", "success")
+    else:
+        # Dev mode: show the link so you can click it locally
+        flash(f"Dev mode: click to verify → {verify_url}", "success")
+
+
+def _send_reset_email(user: User, token: PasswordResetToken) -> None:
+    reset_url = url_for("auth.reset_get", token=token.token, _external=True)
+    html = f"""
+      <p>Hi {user.name},</p>
+      <p>Use the link below to reset your password. This link expires soon.</p>
+      <p><a href="{reset_url}">Reset my password</a></p>
+      <p>If you didn’t request this, you can ignore this message.</p>
+    """
+    ok = _smtp_send(user.email, "Password reset", html)
+    if ok:
+        flash("Password reset link sent. Please check your email.", "success")
+    else:
+        flash(f"Dev mode: reset link → {reset_url}", "success")
+
+
+# =========================================================
+# Auth routes
+# =========================================================
 
 @auth_bp.get("/login")
 def login_get():
     if current_user.is_authenticated:
-        # already logged in → go to your role home
         return redirect(_role_home(current_user.role or "PLAYER"))
     return render_template("login.html", page_title="Sign In")
 
@@ -60,16 +140,20 @@ def login_post():
         flash("Invalid email or password.", "error")
         return redirect(url_for("auth.login_get"))
 
+    # Enforce verified email before allowing login
+    if not user.email_verified:
+        _send_verification_email(user)
+        flash("Please verify your email before signing in.", "error")
+        return redirect(url_for("auth.login_get"))
+
     login_user(user, remember=remember)
 
     # role-aware redirect
     next_url = request.args.get("next") or request.form.get("next") or ""
     if _is_safe_next(next_url):
-        # Optional: keep next only if it's consistent with role
-        # e.g., block non-admins from being redirected into /admin
         if user.role != "ADMIN" and next_url.startswith("/admin"):
             return redirect(_role_home(user.role))
-        if user.role not in ("ADMIN", "EMPLOYEE") and (next_url.startswith("/employee")):
+        if user.role not in ("ADMIN", "EMPLOYEE") and next_url.startswith("/employee"):
             return redirect(_role_home(user.role))
         return redirect(next_url)
 
@@ -87,25 +171,96 @@ def register_get():
 def register_post():
     name = (request.form.get("name") or "").strip()
     email = (request.form.get("email") or "").strip().lower()
+    mobile = (request.form.get("mobile") or "").strip()
     password = request.form.get("password") or ""
+    confirm  = request.form.get("confirm_password") or ""
 
-    if not name or not email or not password:
+    # Basic validations
+    if not name or not email or not password or not confirm:
         flash("All fields are required.", "error")
+        return redirect(url_for("auth.register_get"))
+
+    if password != confirm:
+        flash("Passwords do not match.", "error")
         return redirect(url_for("auth.register_get"))
 
     if User.query.filter_by(email=email).first():
         flash("Email already registered.", "error")
         return redirect(url_for("auth.register_get"))
 
-    # Create PLAYER by default
-    u = User(name=name, email=email, role="PLAYER")
+    # Optional mobile format check (E.164-ish)
+    if mobile and not re.fullmatch(r"^\+?[0-9]{7,15}$", mobile):
+        flash("Enter a valid mobile number (use country code, e.g. +15551234567).", "error")
+        return redirect(url_for("auth.register_get"))
+
+    # Create PLAYER (unverified)
+    u = User(name=name, email=email, mobile=mobile, role="PLAYER", email_verified=False)
     u.set_password(password)
     db.session.add(u)
     db.session.commit()
 
-    login_user(u)
-    flash("Welcome! Your account is ready.", "success")
-    return redirect(_role_home("PLAYER"))
+    # Send verification
+    _send_verification_email(u)
+
+    flash("Account created. Check your email to verify your address.", "success")
+    return redirect(url_for("auth.login_get"))
+
+
+@auth_bp.get("/verify-email")
+def verify_email():
+    token = (request.args.get("token") or "").strip()
+    if not token:
+        flash("Missing token.", "error")
+        return redirect(url_for("auth.login_get"))
+
+    rec = EmailToken.query.filter_by(token=token, purpose="verify").first()
+    if not rec:
+        flash("Invalid or expired token.", "error")
+        return redirect(url_for("auth.login_get"))
+
+    from datetime import datetime
+    if rec.expires_at and rec.expires_at < datetime.utcnow():
+        db.session.delete(rec)
+        db.session.commit()
+        flash("Verification link expired. We’ve sent a new one.", "error")
+        u = db.session.get(User, rec.user_id)
+        if u:
+            _send_verification_email(u)
+        return redirect(url_for("auth.login_get"))
+
+    # Mark verified
+    u = db.session.get(User, rec.user_id)
+    if not u:
+        flash("Account not found.", "error")
+        return redirect(url_for("auth.login_get"))
+
+    u.email_verified = True
+    u.email_verified_at = datetime.utcnow()
+    db.session.delete(rec)
+    db.session.commit()
+
+    flash("Email verified! You can now sign in.", "success")
+    return redirect(url_for("auth.login_get"))
+
+
+@auth_bp.route("/resend-verification", methods=["GET", "POST"])
+def resend_verification():
+    if current_user.is_authenticated:
+        user = current_user
+    else:
+        email = (request.form.get("email") or request.args.get("email") or "").strip().lower()
+        user = User.query.filter_by(email=email).first()
+
+    if not user:
+        flash("If the account exists, a verification email will be sent.", "success")
+        return redirect(url_for("auth.login_get"))
+
+    if user.email_verified:
+        flash("This email is already verified. Please sign in.", "success")
+        return redirect(url_for("auth.login_get"))
+
+    _send_verification_email(user)
+    return redirect(url_for("auth.login_get"))
 
 
 @auth_bp.get("/logout")
@@ -114,3 +269,125 @@ def logout():
     logout_user()
     flash("Signed out.", "success")
     return redirect(url_for("index"))
+
+
+# =========================================================
+# Forgot / Reset password
+# =========================================================
+
+@auth_bp.get("/forgot")
+def forgot_get():
+    # If you have templates/forgot.html, it will be used; otherwise inline fallback renders.
+    return render_template("forgot.html") if _template_exists("forgot.html") else render_template_string("""
+    {% extends "base.html" %}
+    {% block hero %}<div class="hero"><div class="hero__title">Forgot password</div></div>{% endblock %}
+    {% block content %}
+      <div class="shell" style="max-width:520px">
+        <div class="panel">
+          <form method="post" action="{{ url_for('auth.forgot_post') }}">
+            <label>Email</label>
+            <input class="input" name="email" type="email" placeholder="you@example.com" required>
+            <div class="form-actions"><button class="btn btn-primary" type="submit">Send reset link</button></div>
+          </form>
+        </div>
+      </div>
+    {% endblock %}""")
+
+
+@auth_bp.post("/forgot")
+def forgot_post():
+    email = (request.form.get("email") or "").strip().lower()
+    if not email:
+        flash("Enter your account email.", "error")
+        return redirect(url_for("auth.forgot_get"))
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        # Do not reveal account existence
+        flash("If the account exists, a reset link will be sent.", "success")
+        return redirect(url_for("auth.login_get"))
+
+    token = PasswordResetToken.issue(user.id)
+    _send_reset_email(user, token)
+    return redirect(url_for("auth.login_get"))
+
+
+@auth_bp.get("/reset")
+def reset_get():
+    token = (request.args.get("token") or "").strip()
+    if not token:
+        flash("Missing token.", "error")
+        return redirect(url_for("auth.login_get"))
+
+    return render_template("reset.html", token=token) if _template_exists("reset.html") else render_template_string("""
+    {% extends "base.html" %}
+    {% block hero %}<div class="hero"><div class="hero__title">Reset password</div></div>{% endblock %}
+    {% block content %}
+      <div class="shell" style="max-width:520px">
+        <div class="panel">
+          <form method="post" action="{{ url_for('auth.reset_post') }}">
+            <input type="hidden" name="token" value="{{ token }}">
+            <label>New Password</label>
+            <input class="input" name="password" type="password" required>
+            <label>Confirm Password</label>
+            <input class="input" name="confirm_password" type="password" required>
+            <div class="form-actions"><button class="btn btn-primary" type="submit">Update password</button></div>
+          </form>
+        </div>
+      </div>
+    {% endblock %}""", token=token)
+
+
+@auth_bp.post("/reset")
+def reset_post():
+    token_val = (request.form.get("token") or "").strip()
+    pw = request.form.get("password") or ""
+    cpw = request.form.get("confirm_password") or ""
+
+    if not token_val or not pw or not cpw:
+        flash("All fields are required.", "error")
+        return redirect(url_for("auth.login_get"))
+
+    if pw != cpw:
+        flash("Passwords do not match.", "error")
+        return redirect(url_for("auth.reset_get", token=token_val))
+
+    rec = PasswordResetToken.query.filter_by(token=token_val, used_at=None).first()
+    if not rec:
+        flash("Invalid or expired token.", "error")
+        return redirect(url_for("auth.login_get"))
+
+    from datetime import datetime
+    if rec.expires_at and rec.expires_at < datetime.utcnow():
+        db.session.delete(rec)
+        db.session.commit()
+        flash("Reset link expired. Please request a new one.", "error")
+        return redirect(url_for("auth.forgot_get"))
+
+    user = db.session.get(User, rec.user_id)
+    if not user:
+        flash("Account not found.", "error")
+        return redirect(url_for("auth.login_get"))
+
+    user.set_password(pw)
+    rec.used_at = datetime.utcnow()
+    db.session.commit()
+
+    flash("Password updated. You can now sign in.", "success")
+    return redirect(url_for("auth.login_get"))
+
+
+# =========================================================
+# Utility
+# =========================================================
+def _template_exists(name: str) -> bool:
+    """
+    Returns True if a Jinja template file exists.
+    Lets us gracefully fall back to simple inline forms
+    when the project hasn't created the optional templates yet.
+    """
+    try:
+        render_template(name)
+        return True
+    except Exception:
+        return False

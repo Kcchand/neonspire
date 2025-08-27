@@ -9,28 +9,17 @@
     <div class="admin-actions" style="display:flex;gap:8px;flex-wrap:wrap">
       <a class="btn chip-btn" href="{{ url_for('adminbp.settings_get') }}">Settings</a>
       <a class="btn chip-btn" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.admin_users') }}">Employees</a>
       <a class="btn chip-btn" href="{{ url_for('auth.login_get') }}?next={{ url_for('employeebp.employee_home') }}">Staff Login Link</a>
     </div>
   </div>
 
   <!-- METRICS -->
   <div class="admin-metrics" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px">
-    <div class="panel card">
-      <div class="metric-label">Players</div>
-      <div class="metric-value h3">{{ players_count or 0 }}</div>
-    </div>
-    <div class="panel card">
-      <div class="metric-label">Employees</div>
-      <div class="metric-value h3">{{ employees_count or 0 }}</div>
-    </div>
-    <div class="panel card">
-      <div class="metric-label">Games</div>
-      <div class="metric-value h3">{{ games_count or 0 }}</div>
-    </div>
-    <div class="panel card">
-      <div class="metric-label">Pending Deposits</div>
-      <div class="metric-value h3">{{ pending_deposits_count or 0 }}</div>
-    </div>
+    <div class="panel card"><div class="metric-label">Players</div><div class="metric-value h3">{{ players_count or 0 }}</div></div>
+    <div class="panel card"><div class="metric-label">Employees</div><div class="metric-value h3">{{ employees_count or 0 }}</div></div>
+    <div class="panel card"><div class="metric-label">Games</div><div class="metric-value h3">{{ games_count or 0 }}</div></div>
+    <div class="panel card"><div class="metric-label">Pending Deposits</div><div class="metric-value h3">{{ pending_deposits_count or 0 }}</div></div>
   </div>
 
   <!-- PROMOTIONS / NEWS + TRENDING -->
@@ -41,7 +30,7 @@
         <div class="section-title">Promotions / Ticker Text</div>
         <div class="muted">Edit the lobby news lines and bonus percent.</div>
       </div>
-      <form method="post" action="{{ url_for('adminbp.update_news') }}" class="form-grid" enctype="multipart/form-data">
+      <form method="post" action="{{ url_for('adminbp.update_news') }}" class="form-grid">
         <div class="form-group">
           <label>Promo line 1</label>
           <input id="promo1" name="promo_line1" type="text" placeholder="e.g., 🔥 Orion is hitting today" value="{{ promo_line1_value or '' }}">
@@ -52,11 +41,9 @@
         </div>
         <div class="form-group">
           <label>Bonus percent (optional)</label>
-          <input id="bonus" name="bonus_percent" type="number" min="0" step="1" value="{{ settings.bonus_percent or '' }}">
+          <input id="bonus" name="bonus_percent" type="number" min="0" step="1" value="{{ settings.bonus_percent or 0 }}">
         </div>
-        <div class="form-actions">
-          <button class="btn btn-primary">Save Promotions</button>
-        </div>
+        <div class="form-actions"><button class="btn btn-primary">Save Promotions</button></div>
       </form>
 
       <!-- Live Promo Ticker Preview -->
@@ -95,9 +82,7 @@
           <label>Note (optional)</label>
           <input name="trending_note" type="text" placeholder="Short note for internal use" value="{{ settings.trending_note or '' }}">
         </div>
-        <div class="form-actions">
-          <button class="btn btn-primary">Save Trending</button>
-        </div>
+        <div class="form-actions"><button class="btn btn-primary">Save Trending</button></div>
       </form>
 
       <!-- Live Trending Carousel Preview -->
@@ -136,13 +121,7 @@
     {% if pending_deposits and pending_deposits|length %}
       <div class="table">
         <div class="t-head">
-          <div>ID</div>
-          <div>Player</div>
-          <div>Amount</div>
-          <div>Method</div>
-          <div>Proof</div>
-          <div>When</div>
-          <div class="t-right">Action</div>
+          <div>ID</div><div>Player</div><div>Amount</div><div>Method</div><div>Proof</div><div>When</div><div class="t-right">Action</div>
         </div>
         {% for d in pending_deposits %}
         <div class="t-row">
@@ -150,23 +129,11 @@
           <div class="muted">#{{ d.user_id }}</div>
           <div>{{ d.amount }}</div>
           <div>{{ d.method or '—' }}</div>
-          <div>
-            {% if d.proof_url %}
-              <a href="{{ d.proof_url }}" target="_blank">open</a>
-            {% else %}
-              <span class="muted">—</span>
-            {% endif %}
-          </div>
-          <div class="muted">
-            {% if d.created_at %}{{ d.created_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}
-          </div>
+          <div>{% if d.proof_url %}<a href="{{ d.proof_url }}" target="_blank">open</a>{% else %}<span class="muted">—</span>{% endif %}</div>
+          <div class="muted">{% if d.created_at %}{{ d.created_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}</div>
           <div class="t-right" style="display:flex;gap:6px;justify-content:flex-end">
-            <form method="post" action="{{ url_for('adminbp.deposit_mark', dep_id=d.id, action='loaded') }}">
-              <button class="btn btn-mini btn-primary">Approve</button>
-            </form>
-            <form method="post" action="{{ url_for('adminbp.deposit_mark', dep_id=d.id, action='reject') }}">
-              <button class="btn btn-mini btn-ghost">Reject</button>
-            </form>
+            <form method="post" action="{{ url_for('adminbp.deposit_mark', dep_id=d.id, action='loaded') }}"><button class="btn btn-mini btn-primary">Approve</button></form>
+            <form method="post" action="{{ url_for('adminbp.deposit_mark', dep_id=d.id, action='reject') }}"><button class="btn btn-mini btn-ghost">Reject</button></form>
           </div>
         </div>
         {% endfor %}
@@ -186,12 +153,7 @@
     {% if games and games|length %}
       <div class="table">
         <div class="t-head">
-          <div>Icon</div>
-          <div style="min-width:160px">Name</div>
-          <div>Description</div>
-          <div>Download URL</div>
-          <div>Status</div>
-          <div class="t-right">Actions</div>
+          <div>Icon</div><div style="min-width:160px">Name</div><div>Description</div><div>Download URL</div><div>Status</div><div class="t-right">Actions</div>
         </div>
 
         {% for g in games %}
@@ -205,17 +167,10 @@
           </div>
 
           <form method="post" action="{{ url_for('adminbp.edit_game_post', game_id=g.id) }}" enctype="multipart/form-data" style="display:contents">
-            <div>
-              <input name="name" type="text" value="{{ g.name }}" style="min-width:160px">
-            </div>
-            <div>
-              <input name="description" type="text" value="{{ g.description or '' }}" placeholder="Short tagline">
-            </div>
-            <div>
-              <input name="download_url" type="url" value="{{ g.download_url or '' }}" placeholder="https://…">
-            </div>
+            <div><input name="name" type="text" value="{{ g.name }}" style="min-width:160px"></div>
+            <div><input name="description" type="text" value="{{ g.description or '' }}" placeholder="Short tagline"></div>
+            <div><input name="download_url" type="url" value="{{ g.download_url or '' }}" placeholder="https://…"></div>
             <div class="muted">{{ 'Active' if g.is_active else 'Inactive' }}</div>
-
             <div class="t-right" style="display:flex;gap:6px;justify-content:flex-end;align-items:center">
               <input name="icon_url" type="url" placeholder="Icon URL" style="max-width:160px">
               <input name="icon_file" type="file" accept=".png,.jpg,.jpeg,.webp" style="max-width:210px">
@@ -224,12 +179,8 @@
           </form>
 
           <div class="t-right" style="display:flex;gap:6px;justify-content:flex-end">
-            <form method="get" action="{{ url_for('adminbp.toggle_game', game_id=g.id) }}">
-              <button class="btn btn-mini btn-ghost">Toggle</button>
-            </form>
-            <form method="post" action="{{ url_for('adminbp.delete_game', game_id=g.id) }}" onsubmit="return confirm('Delete this game?')">
-              <button class="btn btn-mini btn-ghost">Delete</button>
-            </form>
+            <form method="get" action="{{ url_for('adminbp.toggle_game', game_id=g.id) }}"><button class="btn btn-mini btn-ghost">Toggle</button></form>
+            <form method="post" action="{{ url_for('adminbp.delete_game', game_id=g.id) }}" onsubmit="return confirm('Delete this game?')"><button class="btn btn-mini btn-ghost">Delete</button></form>
           </div>
         </div>
         {% endfor %}
@@ -243,46 +194,24 @@
   <div class="admin-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
     <!-- Employee Contributions -->
     <div class="panel card">
-      <div class="section-head">
-        <div class="section-title">Employee Contributions</div>
-        <div class="muted">Loaded deposits & IDs created (best-effort if fields exist).</div>
-      </div>
+      <div class="section-head"><div class="section-title">Employee Contributions</div><div class="muted">Loaded deposits & IDs created.</div></div>
       <div class="table">
-        <div class="t-head">
-          <div>Employee</div>
-          <div>Deposits Loaded</div>
-          <div>Loaded Amount</div>
-          <div>IDs Created</div>
-        </div>
+        <div class="t-head"><div>Employee</div><div>Deposits Loaded</div><div>Loaded Amount</div><div>IDs Created</div></div>
         {% for emp in employees %}
           {% set dep_bucket = dep_by_emp.get(emp.id, {'count':0,'sum':0}) %}
-          <div class="t-row">
-            <div>{{ emp.name or emp.email }}</div>
-            <div>{{ dep_bucket.count }}</div>
-            <div>{{ dep_bucket.sum }}</div>
-            <div>{{ ids_by_emp.get(emp.id, 0) }}</div>
-          </div>
+          <div class="t-row"><div>{{ emp.name or emp.email }}</div><div>{{ dep_bucket.count }}</div><div>{{ dep_bucket.sum }}</div><div>{{ ids_by_emp.get(emp.id, 0) }}</div></div>
         {% endfor %}
       </div>
     </div>
 
     <!-- Players per Game -->
     <div class="panel card">
-      <div class="section-head">
-        <div class="section-title">Players per Game</div>
-        <div class="muted">How many player accounts exist per title.</div>
-      </div>
+      <div class="section-head"><div class="section-title">Players per Game</div><div class="muted">How many player accounts exist per title.</div></div>
       {% if players_per_game and players_per_game|length %}
         <div class="table">
-          <div class="t-head">
-            <div>Game</div>
-            <div class="t-right">Players</div>
-          </div>
+          <div class="t-head"><div>Game</div><div class="t-right">Players</div></div>
           {% for row in players_per_game %}
-          <div class="t-row">
-            <div>{{ row.game.name }}</div>
-            <div class="t-right">{{ row.count }}</div>
-          </div>
+          <div class="t-row"><div>{{ row.game.name }}</div><div class="t-right">{{ row.count }}</div></div>
           {% endfor %}
         </div>
       {% else %}
@@ -291,7 +220,7 @@
     </div>
   </div>
 
-  <!-- Latest IDs (SCROLLABLE + SEARCHABLE) -->
+  <!-- Latest IDs -->
   <div class="panel card">
     <div class="section-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
       <div class="section-title">Latest Player Logins Issued</div>
@@ -306,12 +235,8 @@
     {% if latest_ids and latest_ids|length %}
       <div class="table" style="max-height:320px;overflow:auto;border:1px dashed var(--stroke);border-radius:10px">
         <div class="t-head" style="position:sticky;top:0;background:var(--panel);z-index:1">
-          <div>Player</div>
-          <div>Game</div>
-          <div>Issued By</div>
-          <div>When</div>
+          <div>Player</div><div>Game</div><div>Issued By</div><div>When</div>
         </div>
-
         <div id="idsBody">
           {% for r in latest_ids %}
           <div class="t-row ids-row">
@@ -332,45 +257,34 @@
 
 <!-- Ticker animation -->
 <style>
-@keyframes scroll-left {
-  0% { transform: translateX(100%); }
-  100% { transform: translateX(-100%); }
-}
+@keyframes scroll-left { 0% { transform: translateX(100%);} 100% { transform: translateX(-100%);} }
 </style>
 
 <!-- Live previews + IDs filter JS -->
 <script>
 document.addEventListener("DOMContentLoaded", () => {
-  /* ---- Promo live preview ---- */
+  // Promo live preview
   const promo1 = document.getElementById("promo1");
   const promo2 = document.getElementById("promo2");
   const bonus  = document.getElementById("bonus");
-  if (promo1) promo1.addEventListener("input", () => {
-    document.getElementById("promoPreview1").textContent = promo1.value || "Line 1…";
-  });
-  if (promo2) promo2.addEventListener("input", () => {
-    document.getElementById("promoPreview2").textContent = promo2.value || "Line 2…";
-  });
-  if (bonus) bonus.addEventListener("input", () => {
-    document.getElementById("promoPreviewBonus").textContent = "Bonus: " + (bonus.value || 0) + "%";
-  });
+  if (promo1) promo1.addEventListener("input", () => document.getElementById("promoPreview1").textContent = promo1.value || "Line 1…");
+  if (promo2) promo2.addEventListener("input", () => document.getElementById("promoPreview2").textContent = promo2.value || "Line 2…");
+  if (bonus)  bonus.addEventListener("input",  () => document.getElementById("promoPreviewBonus").textContent = "Bonus: " + (bonus.value || 0) + "%");
 
-  /* ---- Trending carousel preview ---- */
+  // Trending carousel preview
   const form = document.getElementById("trendingForm");
   const carousel = document.getElementById("trendingCarousel");
-  function rebuildCarousel() {
+  function rebuildCarousel(){
     if (!form || !carousel) return;
     carousel.innerHTML = "";
-    const checked = form.querySelectorAll('input[name="trending_ids"]:checked');
-    checked.forEach(cb => {
+    form.querySelectorAll('input[name="trending_ids"]:checked').forEach(cb => {
       const wrap = document.createElement("div");
       wrap.className = "trend-card";
       wrap.style = "display:inline-flex;align-items:center;gap:8px;border:1px solid #e4e4e7;background:#fff;border-radius:8px;padding:6px 10px;min-width:max-content";
       const icon = cb.dataset.icon;
-      if (icon) {
+      if (icon){
         const img = document.createElement("img");
-        img.src = icon; img.width = 24; img.height = 24;
-        img.style = "object-fit:cover;border-radius:6px";
+        img.src = icon; img.width = 24; img.height = 24; img.style = "object-fit:cover;border-radius:6px";
         wrap.appendChild(img);
       } else {
         const box = document.createElement("div");
@@ -385,50 +299,37 @@ document.addEventListener("DOMContentLoaded", () => {
       carousel.appendChild(wrap);
     });
   }
-  if (form) {
-    form.querySelectorAll('input[name="trending_ids"]').forEach(cb => {
-      cb.addEventListener("change", rebuildCarousel);
-    });
+  if (form){
+    form.querySelectorAll('input[name="trending_ids"]').forEach(cb => cb.addEventListener("change", rebuildCarousel));
   }
   const btnPrev = document.getElementById("trendPrev");
   const btnNext = document.getElementById("trendNext");
-  const scrollStep = 240;
-  if (btnPrev && carousel) btnPrev.addEventListener("click", () => carousel.scrollLeft -= scrollStep);
-  if (btnNext && carousel) btnNext.addEventListener("click", () => carousel.scrollLeft += scrollStep);
+  const step = 240;
+  if (btnPrev && carousel) btnPrev.addEventListener("click", () => carousel.scrollLeft -= step);
+  if (btnNext && carousel) btnNext.addEventListener("click", () => carousel.scrollLeft += step);
 
-  /* ---- Latest IDs: search + counters + shortcuts ---- */
+  // Latest IDs: search/filter
   const q = document.getElementById("idsSearch");
   const clearBtn = document.getElementById("idsClear");
   const body = document.getElementById("idsBody");
   const count = document.getElementById("idsCount");
-  if (!q || !body || !count) return;
-
-  const rows = Array.from(body.querySelectorAll(".ids-row"));
-  function applyFilter() {
-    const term = q.value.trim().toLowerCase();
-    let visible = 0;
-    rows.forEach(row => {
-      const text = row.textContent.toLowerCase();
-      const show = !term || text.includes(term);
-      row.style.display = show ? "" : "none";
-      if (show) visible += 1;
-    });
-    count.textContent = visible + " / " + rows.length;
-  }
-  q.addEventListener("input", applyFilter);
-  clearBtn.addEventListener("click", () => { q.value = ""; applyFilter(); q.focus(); });
-
-  // Keyboard shortcut: Cmd/Ctrl + K to focus the search
-  document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      q.focus();
-      q.select();
+  if (q && body && count){
+    const rows = Array.from(body.querySelectorAll(".ids-row"));
+    function apply(){
+      const term = q.value.trim().toLowerCase(); let visible = 0;
+      rows.forEach(r => {
+        const show = !term || r.textContent.toLowerCase().includes(term);
+        r.style.display = show ? "" : "none"; if (show) visible++;
+      });
+      count.textContent = visible + " / " + rows.length;
     }
-  });
-
-  // Initial compute
-  applyFilter();
+    q.addEventListener("input", apply);
+    clearBtn.addEventListener("click", () => { q.value=""; apply(); q.focus(); });
+    document.addEventListener("keydown", e => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==="k"){ e.preventDefault(); q.focus(); q.select(); }
+    });
+    apply();
+  }
 });
 </script>
 {% endblock %}

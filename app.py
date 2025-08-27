@@ -5,11 +5,26 @@ from dotenv import load_dotenv
 from flask_login import LoginManager, current_user
 from sqlalchemy import text, inspect as sqla_inspect
 from flask_socketio import SocketIO, emit
+from flask_mail import Mail
 
-# models
+# models (import every model that needs a table so create_all() sees them)
 from models import (
-    db, User, Notification, PlayerBalance, Game, GameAccount,
-    DepositRequest, PaymentSettings
+    db,
+    User,
+    Notification,
+    PlayerBalance,
+    Game,
+    GameAccount,
+    DepositRequest,
+    PaymentSettings,
+    EmailToken,
+    PasswordResetToken,
+    WithdrawRequest,
+    GameAccountRequest,
+    ChatMessage,
+    DMThread,
+    DMMessage,
+    ReferralCode,  # NEW: ensures referral_codes table is created
 )
 
 # blueprints
@@ -22,20 +37,22 @@ from player_bp import player_bp  # player features live on /player
 
 # (optional) live chat blueprint – only registers if present
 try:
-    from chat_bp import chat_bp  # create chat_bp later if you want live chat endpoints
+    from chat_bp import chat_bp
 except Exception:
     chat_bp = None
 
 load_dotenv()
 
 # ------------------------------------------------------------------
-# Socket.IO instance
-# Default to "threading" so it works on Python 3.13 (no eventlet/gevent).
-# Later, if you switch this service to Python 3.11, set ASYNC_MODE=eventlet
-# and change Gunicorn worker accordingly (see notes below).
+# Socket.IO
 # ------------------------------------------------------------------
 ASYNC_MODE = os.getenv("ASYNC_MODE", "threading").strip().lower()
 socketio = SocketIO(async_mode=ASYNC_MODE, cors_allowed_origins="*")
+
+# ------------------------------------------------------------------
+# Mail (exported so other modules can `from app import mail`)
+# ------------------------------------------------------------------
+mail = Mail()
 
 
 def create_app():
@@ -44,8 +61,20 @@ def create_app():
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///casino.db")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+    # Mail config
+    app.config.update(
+        MAIL_SERVER=os.getenv("MAIL_SERVER", "localhost"),
+        MAIL_PORT=int(os.getenv("MAIL_PORT", "25")),
+        MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
+        MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
+        MAIL_USE_TLS=os.getenv("MAIL_USE_TLS", "false").lower() == "true",
+        MAIL_USE_SSL=os.getenv("MAIL_USE_SSL", "false").lower() == "true",
+        MAIL_DEFAULT_SENDER=os.getenv("MAIL_DEFAULT_SENDER", "no-reply@neonspire.local"),
+    )
+
     db.init_app(app)
     socketio.init_app(app)
+    mail.init_app(app)
 
     # ------------------ tiny kv fallback (shared) ------------------
     def _ensure_kv():
@@ -239,27 +268,82 @@ def create_app():
     def _on_connect():
         emit("welcome", {"msg": f"Connected (async={ASYNC_MODE})"})
 
-    # ------------------ first run bootstrap ------------------
+    # ------------------ first run bootstrap & safe patches ------------------
     with app.app_context():
+        # Create tables for all imported models
         db.create_all()
         _ensure_kv()
-        try:
-            insp = sqla_inspect(db.engine)
-            game_cols = {c["name"] for c in insp.get_columns("games")}
-            dialect = db.engine.dialect.name
 
-            if "backend_url" not in game_cols:
+        insp = sqla_inspect(db.engine)
+        dialect = db.engine.dialect.name
+
+        def _has_col(table: str, col: str) -> bool:
+            try:
+                return col in {c["name"] for c in insp.get_columns(table)}
+            except Exception:
+                return False
+
+        def _add_col(stmt_sqlite: str, stmt_pg: str = None, stmt_mysql: str = None):
+            try:
                 if dialect in ("postgresql", "postgres"):
-                    db.session.execute(text("ALTER TABLE games ADD COLUMN IF NOT EXISTS backend_url VARCHAR(500)"))
+                    db.session.execute(text(stmt_pg or stmt_sqlite))
                 elif dialect in ("mysql", "mariadb"):
-                    db.session.execute(text("ALTER TABLE games ADD COLUMN backend_url VARCHAR(500) NULL"))
-                else:
-                    db.session.execute(text("ALTER TABLE games ADD COLUMN backend_url VARCHAR(500)"))
+                    db.session.execute(text(stmt_mysql or stmt_sqlite))
+                else:  # sqlite
+                    db.session.execute(text(stmt_sqlite))
                 db.session.commit()
-                print("✅ Added games.backend_url column")
-        except Exception as e:
-            db.session.rollback()
-            print(f"⚠️ Skipped backend_url patch: {e}")
+            except Exception:
+                db.session.rollback()
+
+        # --- games.backend_url (legacy patch) ---
+        if not _has_col("games", "backend_url"):
+            _add_col(
+                "ALTER TABLE games ADD COLUMN backend_url VARCHAR(500)",
+                "ALTER TABLE games ADD COLUMN IF NOT EXISTS backend_url VARCHAR(500)",
+                "ALTER TABLE games ADD COLUMN backend_url VARCHAR(500) NULL",
+            )
+
+        # --- users table new fields (mobile, email_verified, email_verified_at, promo_seen) ---
+        if not _has_col("users", "mobile"):
+            _add_col("ALTER TABLE users ADD COLUMN mobile VARCHAR(24)")
+        if not _has_col("users", "email_verified"):
+            _add_col("ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT 0")
+        if not _has_col("users", "email_verified_at"):
+            _add_col("ALTER TABLE users ADD COLUMN email_verified_at DATETIME")
+        if not _has_col("users", "promo_seen"):
+            _add_col("ALTER TABLE users ADD COLUMN promo_seen BOOLEAN DEFAULT 0")
+
+        # --- payment_settings social links & promo lines ---
+        ps_cols = {c["name"] for c in insp.get_columns("payment_settings")}
+        needed_ps = {
+            "whatsapp_url": "ALTER TABLE payment_settings ADD COLUMN whatsapp_url VARCHAR(500)",
+            "telegram_url": "ALTER TABLE payment_settings ADD COLUMN telegram_url VARCHAR(500)",
+            "facebook_url": "ALTER TABLE payment_settings ADD COLUMN facebook_url VARCHAR(500)",
+            "instagram_url": "ALTER TABLE payment_settings ADD COLUMN instagram_url VARCHAR(500)",
+            "promo_bonus_line": "ALTER TABLE payment_settings ADD COLUMN promo_bonus_line VARCHAR(300)",
+            "promo_referral_line": "ALTER TABLE payment_settings ADD COLUMN promo_referral_line VARCHAR(300)",
+            "promo_service_line": "ALTER TABLE payment_settings ADD COLUMN promo_service_line VARCHAR(300)",
+            "promo_trust_line": "ALTER TABLE payment_settings ADD COLUMN promo_trust_line VARCHAR(300)",
+        }
+        for col, stmt in needed_ps.items():
+            if col not in ps_cols:
+                _add_col(stmt)
+
+        # Ensure a row exists in payment_settings with id=1
+        ps = db.session.get(PaymentSettings, 1)
+        if not ps:
+            ps = PaymentSettings(
+                id=1,
+                bonus_percent=0,
+                min_redeem=0,
+                max_redeem=0,
+                whatsapp_url="",
+                telegram_url="",
+                facebook_url="",
+                instagram_url="",
+            )
+            db.session.add(ps)
+            db.session.commit()
 
         seed_admin()
 
@@ -283,5 +367,4 @@ def seed_admin():
 app = create_app()
 
 if __name__ == "__main__":
-    # Local dev: uses whatever ASYNC_MODE you set (default threading)
     socketio.run(app, host="127.0.0.1", port=5000, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))

@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ page_title or "NeonSpire Casino" }}</title>
 
+  <!-- App icons / favicon -->
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/logo.png') }}">
+  <meta name="theme-color" content="#0ae7d8" />
+
   <!-- Consistent font across desktop/tablet/mobile -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,19 +17,26 @@
 
   {# cache-bust CSS so users don’t keep stale assets #}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}?v=dm2">
-</head>
 
+  <style>
+    /* tiny helpers just for the brand line */
+    .brand { display:flex; gap:10px; align-items:center; text-decoration:none; color:inherit; font-weight:900; font-size:22px }
+    .brand-logo { height:30px; width:auto; display:block; filter: drop-shadow(0 0 6px rgba(0,255,233,.45)); }
+    @media (max-width:480px){
+      .brand-text { font-size:18px }
+    }
+  </style>
+</head>
 
 <body>
 
   <!-- Top Navigation -->
   <header class="nav" style="position:sticky;top:0;z-index:50;background:rgba(0,0,0,.25);backdrop-filter:blur(8px);border-bottom:1px solid var(--stroke)">
     <div class="shell nav-inner" style="display:flex;align-items:center;justify-content:space-between;height:58px">
-      <!-- Brand -->
-      <a href="{{ url_for('index') }}" class="brand"
-         style="display:flex;gap:10px;align-items:center;text-decoration:none;color:inherit;font-weight:900;font-size:22px">
-        <span class="dot" style="width:10px;height:10px;border-radius:50%;background:#19e1a5;box-shadow:0 0 10px #19e1a5;"></span>
-        <span>NeonSpire Casino</span>
+      <!-- Brand (logo + title) -->
+      <a href="{{ url_for('index') }}" class="brand" aria-label="NeonSpire Casino">
+        <img class="brand-logo" src="{{ url_for('static', filename='img/logo.png') }}" alt="NeonSpire Casino">
+        <span class="brand-text">NeonSpire Casino</span>
       </a>
 
       <!-- Right side -->
@@ -102,7 +114,6 @@
   </footer>
 
   {# ========= Private DM widget (players only). ========= #}
-  {# Do NOT include the old "_chat_widget.html". #}
   {% if current_user.is_authenticated and current_user.role == 'PLAYER' %}
     {% include "_dm_widget.html" %}
   {% endif %}

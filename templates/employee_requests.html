@@ -40,6 +40,7 @@
           {% set u = umap.get(r.user_id) %}
           {% set g = gmap.get(r.game_id) %}
           {% set be = (backend_urls.get(r.game_id) if backend_urls is defined else (g.backend_url if g and g.backend_url else None)) %}
+          {% set refc = (refcodes.get(r.user_id) if refcodes is defined else None) %}
 
           <div class="t-row">
             <!-- Player -->
@@ -54,6 +55,9 @@
               <div class="muted" style="font-size:12px">
                 Req #{{ r.id }}{% if r.created_at %} • {{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
               </div>
+              {% if refc %}
+                <div class="muted" style="font-size:12px">Referral: <span class="mono">{{ refc }}</span></div>
+              {% endif %}
             </div>
 
             <!-- Game + quick links -->
@@ -125,8 +129,12 @@
         {% for r in recent %}
           {% set u = umap.get(r.user_id) %}
           {% set g = gmap.get(r.game_id) %}
+          {% set refc = (refcodes.get(r.user_id) if refcodes is defined else None) %}
           <div class="t-row">
-            <div>{{ (u.name or u.email or ('#' ~ r.user_id)) }}</div>
+            <div>
+              {{ (u.name or u.email or ('#' ~ r.user_id)) }}
+              {% if refc %}<div class="muted" style="font-size:12px">Ref: <span class="mono">{{ refc }}</span></div>{% endif %}
+            </div>
             <div>{{ g.name if g else ('#' ~ r.game_id) }}</div>
             <div>{{ r.status }}</div>
             <div>{% if r.created_at %}{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}</div>

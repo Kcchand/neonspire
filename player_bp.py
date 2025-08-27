@@ -1,6 +1,8 @@
 # player_bp.py
 from datetime import datetime
-from flask import Blueprint, render_template, request, redirect, url_for, flash, abort
+import re
+import random
+from flask import Blueprint, render_template, render_template_string, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
 from sqlalchemy import text
 
@@ -15,6 +17,7 @@ from models import (
     WithdrawRequest,
     PaymentSettings,
     Notification,
+    ReferralCode,   # <-- REFERRALS
     notify,
 )
 
@@ -93,6 +96,14 @@ def _first_attr(obj, *names, default=None):
             if val not in (None, ""):
                 return val
     return default
+
+def _template_exists(name: str) -> bool:
+    """Gracefully fall back if a template file hasn't been created yet."""
+    try:
+        render_template(name)  # will raise if missing
+        return True
+    except Exception:
+        return False
 
 # alias sets (match admin)
 PROMO1_ALIASES = ("promo_line1", "news_line1", "ticker_line1", "headline1", "news1")
@@ -325,7 +336,7 @@ def withdraw_post():
     tip_amount   = request.form.get("tip_amount", type=int) or 0
     amount = request.form.get("amount", type=int) or 0
     if amount <= 0 or total_amount <= 0:
-        flash("Please enter a valid total and cash‑out amount.", "error")
+        flash("Please enter a valid total and cash-out amount.", "error")
         return redirect(url_for("playerbp.withdraw_get"))
     game_id = request.form.get("game_id", type=int)
     if game_id:
@@ -426,3 +437,115 @@ def accounts_page():
 # ---------- Endpoint aliases (keep old links working) ----------
 player_bp.add_url_rule("/my-logins", endpoint="logins", view_func=accounts_page)
 player_bp.add_url_rule("/deposit", endpoint="deposit_get", view_func=deposit_step1)
+
+# =================================================================
+#                          REFERRALS
+# =================================================================
+
+def _generate_ref_code_for(user: User) -> str:
+    """Two letters from name (A-Z) + 4 digits => 6 chars total, unique."""
+    base = "".join(re.findall(r"[A-Za-z]", (user.name or "").strip()))[:2].upper()
+    if len(base) < 2:
+        base = (base + "XX")[:2]
+    # loop until a unique code is found
+    for _ in range(50):
+        num = random.randint(0, 9999)
+        code = f"{base}{num:04d}"
+        if not ReferralCode.query.filter_by(code=code).first():
+            return code
+    # extreme fallback with random prefix
+    return f"RX{random.randint(0, 9999):04d}"
+
+def _ensure_referral_for(user_id: int) -> ReferralCode:
+    rc = ReferralCode.query.filter_by(user_id=user_id).first()
+    if rc:
+        return rc
+    user = db.session.get(User, user_id)
+    code = _generate_ref_code_for(user)
+    rc = ReferralCode(user_id=user_id, code=code, created_at=datetime.utcnow())
+    db.session.add(rc)
+    db.session.commit()
+    return rc
+
+@player_bp.get("/referral")
+@login_required
+def referral_home():
+    """Player-facing page that shows their code and a shareable link."""
+    if not _player_like():
+        return abort(403)
+    rc = _ensure_referral_for(current_user.id)
+    # share link points to a public landing under this blueprint
+    share_url = url_for("playerbp.referral_landing", code=rc.code, _external=True)
+
+    if _template_exists("player_referral.html"):
+        return render_template("player_referral.html",
+                               page_title="Referral • NeonSpire Casino",
+                               code=rc.code,
+                               link=share_url)
+    # Inline fallback (keeps app working even without a template file)
+    return render_template_string("""
+    {% extends "base.html" %}
+    {% block content %}
+    <div class="shell">
+      <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
+        <div class="h3">Referral Program</div>
+        <a class="btn" href="{{ url_for('playerbp.player_dashboard') }}">← Back</a>
+      </div>
+      <div class="panel">
+        <p>Your referral code:</p>
+        <div class="h3" style="letter-spacing:2px">{{ code }}</div>
+        <p style="margin-top:10px">Share this link with your friends:</p>
+        <input class="input" style="width:100%" value="{{ link }}" readonly onclick="this.select()">
+        <p class="muted" style="margin-top:10px">Format is first 2 letters of your name + 4 digits, so staff can recognize who referred.</p>
+      </div>
+    </div>
+    {% endblock %}
+    """, code=rc.code, link=share_url)
+
+# ---- NEW: JSON endpoint used by the lobby popup "Get My Link" ----
+@player_bp.get("/referral/my-link.json", endpoint="referral_my_link_json")
+@login_required
+def referral_my_link_json():
+    """Return the player's referral code and full link as JSON."""
+    if not _player_like():
+        return abort(403)
+    rc = _ensure_referral_for(current_user.id)
+    share_url = url_for("playerbp.referral_landing", code=rc.code, _external=True)
+    return {"code": rc.code, "link": share_url}, 200
+
+@player_bp.post("/referral/new")
+@login_required
+def referral_new_code():
+    """Optional: allow a player to rotate their code (keeps unique)."""
+    if not _player_like():
+        return abort(403)
+    rc = ReferralCode.query.filter_by(user_id=current_user.id).first()
+    if not rc:
+        rc = _ensure_referral_for(current_user.id)
+        flash("Referral code created.", "success")
+        return redirect(url_for("playerbp.referral_home"))
+
+    # generate a new unique code and save
+    rc.code = _generate_ref_code_for(current_user)
+    rc.created_at = datetime.utcnow()
+    db.session.commit()
+    flash("Referral code updated.", "success")
+    return redirect(url_for("playerbp.referral_home"))
+
+@player_bp.get("/ref/<string:code>")
+def referral_landing(code: str):
+    """
+    Public landing for a referral link. We don't require login here.
+    For now, just bounce to /register with ?ref=CODE so the flow can
+    record it on signup (or staff can see it in chat/support).
+    """
+    code = (code or "").strip().upper()
+    rc = ReferralCode.query.filter_by(code=code).first()
+    if not rc:
+        flash("Referral code not found.", "error")
+        return redirect(url_for("auth.register_get"))
+    # Increment basic stats so employees can see performance later
+    rc.uses = (rc.uses or 0) + 1
+    db.session.commit()
+    # forward to register with the ref param
+    return redirect(url_for("auth.register_get") + f"?ref={code}")

@@ -156,7 +156,8 @@ document.addEventListener("DOMContentLoaded", () => {
     <div class="rail-card">
       <div class="rail-title">Referral Program</div>
       {% if current_user.is_authenticated %}
-        <a class="btn btn-wide" href="#">Get My Link</a>
+        <!-- wired to popup (no page change) -->
+        <a class="btn btn-wide" href="#" id="getRefLinkBtn">Get My Link</a>
       {% else %}
         <a class="btn btn-wide" href="{{ url_for('auth.register_get') }}">Get My Link</a>
       {% endif %}
@@ -258,5 +259,134 @@ document.addEventListener('DOMContentLoaded', function () {
     }, { capture: true });
   });
 });
+</script>
+
+{# ============================ REFERRAL POPUP (NO NEW PAGE) ============================ #}
+<div id="refModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="refTitle"
+     style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:9999;">
+  <!-- overlay -->
+  <div data-ref-overlay
+       style="position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:saturate(120%) blur(2px)"></div>
+
+  <!-- dialog -->
+  <div class="panel" role="document"
+       style="position:relative;max-width:640px;width:92%;border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.35);z-index:1">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+      <div id="refTitle" class="h3">Your Referral Link</div>
+      <button type="button" class="btn btn-ghost" id="refCloseBtn" aria-label="Close">✕</button>
+    </div>
+
+    <div id="refBody">
+      <div id="refLoading" class="muted">Generating your link…</div>
+
+      <div id="refResult" style="display:none">
+        <div class="muted" style="margin:0 0 8px 0">
+          Share this link. It includes your code <b id="refCodeText">—</b>.
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">
+          <input id="refLinkInput" class="input" readonly value="">
+          <button class="btn btn-primary" type="button" id="copyRefBtn">Copy</button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap">
+          <a id="openRefBtn" class="btn" href="#" target="_blank" rel="noopener">Open</a>
+          <button class="btn btn-ghost" type="button" id="newRefBtn">Regenerate</button>
+        </div>
+
+        <div class="muted" style="margin-top:8px;font-size:12px">
+          Tip for employees: code format is two letters + four digits (e.g., <code>AB1234</code>) so you can match referrals quickly.
+        </div>
+      </div>
+
+      <div id="refError" style="display:none;color:#ff8a8a">Couldn’t get your link. Please try again.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const modal   = document.getElementById('refModal');
+  const btn     = document.getElementById('getRefLinkBtn');
+  if(!modal || !btn) return;
+
+  const closeBtn   = document.getElementById('refCloseBtn');
+  const overlay    = modal.querySelector('[data-ref-overlay]');
+  const loadingEl  = document.getElementById('refLoading');
+  const resultEl   = document.getElementById('refResult');
+  const errorEl    = document.getElementById('refError');
+  const inputEl    = document.getElementById('refLinkInput');
+  const codeEl     = document.getElementById('refCodeText');
+  const copyBtn    = document.getElementById('copyRefBtn');
+  const openBtn    = document.getElementById('openRefBtn');
+  const regenBtn   = document.getElementById('newRefBtn');
+
+  function openModal(){
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  }
+  function closeModal(){
+    modal.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+  function setState(state){
+    // states: loading | result | error
+    loadingEl.style.display = state==='loading' ? '' : 'none';
+    resultEl.style.display  = state==='result'  ? '' : 'none';
+    errorEl.style.display   = state==='error'   ? '' : 'none';
+  }
+
+  async function fetchRef(jsonUrl){
+    setState('loading');
+    try{
+      const r = await fetch(jsonUrl, {credentials:'same-origin', headers:{'Accept':'application/json'}});
+      if(r.status === 401 || r.status === 403){
+        // not signed in — bounce to login
+        window.location.href = "{{ url_for('auth.login_get') }}";
+        return;
+      }
+      if(!r.ok) throw new Error('bad response');
+      const data = await r.json();
+      inputEl.value = data.link || '';
+      codeEl.textContent = data.code || '—';
+      openBtn.href = data.link || '#';
+      setState('result');
+    }catch(e){
+      setState('error');
+    }
+  }
+
+  // open + initial fetch
+  btn.addEventListener('click', (e)=>{
+    e.preventDefault();
+    openModal();
+    fetchRef("{{ url_for('playerbp.referral_my_link_json') }}");
+  });
+
+  // regenerate (gets a fresh code if your backend chooses to — otherwise returns same)
+  regenBtn.addEventListener('click', ()=>{
+    fetchRef("{{ url_for('playerbp.referral_my_link_json') }}?force=1");
+  });
+
+  // copy
+  copyBtn.addEventListener('click', async ()=>{
+    try{
+      inputEl.select(); inputEl.setSelectionRange(0, 99999);
+      if(navigator.clipboard && window.isSecureContext){
+        await navigator.clipboard.writeText(inputEl.value);
+      }else{
+        document.execCommand('copy');
+      }
+      copyBtn.textContent = 'Copied!';
+      setTimeout(()=>copyBtn.textContent='Copy', 1200);
+    }catch(_){
+      alert('Copied!');
+    }
+  });
+
+  // close handlers
+  [closeBtn, overlay].forEach(el => el.addEventListener('click', closeModal));
+  document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && modal.style.display === 'flex'){ closeModal(); } });
+})();
 </script>
 {% endblock %}

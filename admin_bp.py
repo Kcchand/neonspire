@@ -8,7 +8,8 @@ from flask import (
     url_for, flash, abort, current_app
 )
 from flask_login import login_required, current_user
-from sqlalchemy import text
+from sqlalchemy import text, func
+from sqlalchemy import inspect as sqla_inspect  # <-- SQLAlchemy 2.x safe table check
 
 from models import (
     db,
@@ -18,7 +19,7 @@ from models import (
     PaymentSettings,
     PlayerBalance,      # optional wallet credit on deposit load
     GameAccount,        # for IDs / reporting
-    GameAccountRequest, # for who handled requests (if your schema has it)
+    GameAccountRequest, # schema may exist with different statuses
     notify,
 )
 
@@ -30,7 +31,7 @@ admin_bp = Blueprint("adminbp", __name__, url_prefix="/admin")
 def require_admin():
     if not current_user.is_authenticated:
         return redirect(url_for("auth.login_get", next=url_for("adminbp.admin_home")))
-    if current_user.role != "ADMIN":
+    if (current_user.role or "").upper() != "ADMIN":
         return abort(403)
 
 # -------------------- Helpers -------------------
@@ -66,7 +67,7 @@ def _ensure_kv():
     """Create a simple key–value table if it doesn't exist."""
     try:
         bind = db.session.get_bind()
-        dialect = bind.dialect.name
+        dialect = bind.dialect.name if bind else "sqlite"
         if dialect in ("postgresql", "postgres"):
             db.session.execute(text("""
                 CREATE TABLE IF NOT EXISTS kv_store (
@@ -96,9 +97,8 @@ def _kv_set(k: str, v: str | None):
     _ensure_kv()
     v = v if v is not None else ""
     try:
-        # upsert
         bind = db.session.get_bind()
-        dialect = bind.dialect.name
+        dialect = bind.dialect.name if bind else "sqlite"
         if dialect in ("postgresql", "postgres"):
             db.session.execute(
                 text("INSERT INTO kv_store(key,value) VALUES(:k,:v) "
@@ -179,7 +179,7 @@ def admin_home():
     loaded = DepositRequest.query.filter_by(status="LOADED").all()
     dep_by_emp = {}
     for d in loaded:
-        emp_id = getattr(d, "processed_by", None) or getattr(d, "loaded_by", None)
+        emp_id = getattr(d, "loaded_by", None)  # your schema uses loaded_by
         if not emp_id:
             continue
         bucket = dep_by_emp.setdefault(emp_id, {"count": 0, "sum": 0})
@@ -188,17 +188,24 @@ def admin_home():
 
     employees_map = {e.id: e for e in employees}
 
-    # IDs created per employee (best effort)
+    # IDs created per employee (SQLAlchemy 2.x safe table presence check)
     ids_by_emp = {}
-    approved_reqs = GameAccountRequest.query.filter_by(status="APPROVED").all()
-    for r in approved_reqs:
-        emp_id = getattr(r, "handled_by", None) or getattr(r, "approved_by", None)
-        if emp_id:
-            ids_by_emp[emp_id] = ids_by_emp.get(emp_id, 0) + 1
+    try:
+        insp = sqla_inspect(db.engine)
+        if "game_account_requests" in insp.get_table_names():
+            q = GameAccountRequest.query.filter(
+                GameAccountRequest.status.in_(["PROVIDED", "APPROVED"])
+            )
+            for r in q.all():
+                emp_id = getattr(r, "handled_by", None) or getattr(r, "approved_by", None)
+                if emp_id:
+                    ids_by_emp[emp_id] = ids_by_emp.get(emp_id, 0) + 1
+    except Exception:
+        db.session.rollback()
 
     # Players per game
     acc_counts = (
-        db.session.query(GameAccount.game_id, db.func.count(GameAccount.id))
+        db.session.query(GameAccount.game_id, func.count(GameAccount.id))
         .group_by(GameAccount.game_id)
         .all()
     )
@@ -230,7 +237,8 @@ def admin_home():
             if req:
                 emp_id = getattr(req, "handled_by", None) or getattr(req, "approved_by", None)
                 if emp_id:
-                    emp_name = _name(db.session.get(User, emp_id))
+                    emp = db.session.get(User, emp_id)
+                    emp_name = _name(emp)
         latest_ids.append({
             "player": _name(user),
             "game": gname,
@@ -239,17 +247,10 @@ def admin_home():
         })
 
     # ---- Promo + Trending values (read from columns OR kv fallback) ----
-    promo_line1_value = getattr(s, "promo_line1", None)
-    if not promo_line1_value:
-        promo_line1_value = _kv_get("promo_line1") or ""
+    promo_line1_value = getattr(s, "promo_line1", None) or _kv_get("promo_line1") or ""
+    promo_line2_value = getattr(s, "promo_line2", None) or _kv_get("promo_line2") or ""
 
-    promo_line2_value = getattr(s, "promo_line2", None)
-    if not promo_line2_value:
-        promo_line2_value = _kv_get("promo_line2") or ""
-
-    raw_csv = getattr(s, "trending_game_ids", None)
-    if not raw_csv:
-        raw_csv = _kv_get("trending_game_ids") or ""
+    raw_csv = getattr(s, "trending_game_ids", None) or _kv_get("trending_game_ids") or ""
     selected_ids = set()
     for token in str(raw_csv).split(","):
         token = token.strip()
@@ -281,13 +282,27 @@ def admin_home():
         latest_ids=latest_ids,
     )
 
-# -------------------- Settings (existing) ---------------------
+# -------------------- Settings (GET page) ---------------------
 
 @admin_bp.get("/settings")
 @login_required
 def settings_get():
     s = _get_settings()
-    return render_template("admin_settings.html", page_title="Settings", settings=s)
+
+    promo_line1 = getattr(s, "promo_line1", None) or _kv_get("promo_line1") or ""
+    promo_line2 = getattr(s, "promo_line2", None) or _kv_get("promo_line2") or ""
+    trending_csv = getattr(s, "trending_game_ids", None) or _kv_get("trending_game_ids") or ""
+
+    return render_template(
+        "admin_settings.html",
+        page_title="Settings",
+        settings=s,
+        promo_line1=promo_line1,
+        promo_line2=promo_line2,
+        trending_csv=trending_csv
+    )
+
+# -------------------- Settings: QR / limits / socials ---------------------
 
 @admin_bp.post("/settings/crypto")
 @login_required
@@ -325,7 +340,19 @@ def update_limits():
     flash("Withdrawal limits updated.", "success")
     return redirect(url_for("adminbp.settings_get"))
 
-# -------------------- Promotions / Trending (now persistent) --------
+@admin_bp.post("/settings/socials")
+@login_required
+def update_socials():
+    s = _get_settings()
+    s.whatsapp_url  = (request.form.get("whatsapp_url") or "").strip()
+    s.telegram_url  = (request.form.get("telegram_url") or "").strip()
+    s.facebook_url  = (request.form.get("facebook_url") or "").strip()
+    s.instagram_url = (request.form.get("instagram_url") or "").strip()
+    db.session.commit()
+    flash("Social/contact links updated.", "success")
+    return redirect(url_for("adminbp.settings_get"))
+
+# -------------------- Promotions / Trending -------------------------------
 
 @admin_bp.post("/settings/news")
 @login_required
@@ -353,14 +380,14 @@ def update_news():
 
     db.session.commit()
     flash("Promotions updated.", "success")
-    return redirect(url_for("adminbp.admin_home"))
+    return redirect(url_for("adminbp.settings_get"))
 
 @admin_bp.post("/settings/trending")
 @login_required
 def update_trending():
     """
-    Save today's trending game ids (CSV) + note.
-    Writes to PaymentSettings if columns exist, and always mirrors to kv_store.
+    Save today's trending game ids (CSV) + optional note.
+    Writes to PaymentSettings if columns exist, and mirrors to kv_store.
     """
     s = _get_settings()
 
@@ -380,15 +407,45 @@ def update_trending():
     _maybe_set(s, "trending_game_ids", csv_value)
     _maybe_set(s, "trending_note", note)
 
-    # Always mirror into kv_store
     _kv_set("trending_game_ids", csv_value)
     _kv_set("trending_note", note)
 
     db.session.commit()
     flash("Trending updated.", "success")
-    return redirect(url_for("adminbp.admin_home"))
+    return redirect(url_for("adminbp.settings_get"))
 
-# -------------------- Games Management (dedicated page) -------------
+# -------------------- Employees (Create / List) ---------------------------
+
+@admin_bp.route("/users", methods=["GET", "POST"])
+@login_required
+def admin_users():
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        email = (request.form.get("email") or "").strip().lower()
+        password = request.form.get("password") or ""
+
+        if not name or not email or not password:
+            flash("All fields are required.", "error")
+            return redirect(url_for("adminbp.admin_users"))
+
+        if User.query.filter_by(email=email).first():
+            flash("Email already exists.", "error")
+            return redirect(url_for("adminbp.admin_users"))
+
+        u = User(name=name, email=email, role="EMPLOYEE")
+        u.set_password(password)
+        db.session.add(u)
+        db.session.commit()
+
+        flash("Employee created.", "success")
+        return redirect(url_for("adminbp.admin_users"))
+
+    employees = User.query.filter_by(role="EMPLOYEE").order_by(
+        User.created_at.desc() if hasattr(User, "created_at") else User.id.desc()
+    ).all()
+    return render_template("admin_users.html", employees=employees, page_title="Employees")
+
+# -------------------- Games Management (list/create/edit) -----------------
 
 @admin_bp.get("/games")
 @login_required
@@ -407,7 +464,7 @@ def create_game():
     download_url = (request.form.get("download_url") or "").strip()
     icon_url     = (request.form.get("icon_url") or "").strip()
     is_active    = bool(request.form.get("is_active"))
-    backend_url  = (request.form.get("backend_url") or "").strip()  # NEW
+    backend_url  = (request.form.get("backend_url") or "").strip()  # optional
 
     if not name:
         flash("Game name is required.", "error")
@@ -426,7 +483,6 @@ def create_game():
         is_active=is_active,
     )
 
-    # Safely set backend_url if your Game model has this column
     if hasattr(g, "backend_url"):
         g.backend_url = backend_url or None
 
@@ -454,7 +510,6 @@ def edit_game_post(game_id: int):
     g.description  = (request.form.get("description") or "").strip() or None
     g.download_url = (request.form.get("download_url") or "").strip() or None
 
-    # NEW: backend URL (only if column exists)
     backend_url = (request.form.get("backend_url") or "").strip() or None
     if hasattr(g, "backend_url"):
         g.backend_url = backend_url
@@ -470,10 +525,7 @@ def edit_game_post(game_id: int):
             g.icon_url = url_from_text
 
     # toggle active (if checkbox provided)
-    if "is_active" in request.form:
-        g.is_active = True
-    elif request.form.get("toggle_inactive") == "1":
-        g.is_active = False
+    g.is_active = "is_active" in request.form
 
     db.session.commit()
 
@@ -517,7 +569,14 @@ def deposits_audit():
         .order_by(DepositRequest.created_at.desc())
         .all()
     )
-    return render_template("admin_deposits.html", page_title="Deposits", pending=pending)
+    # Provide recent completed for your template
+    recent = (
+        DepositRequest.query.filter(DepositRequest.status.in_(["LOADED", "PAID"]))
+        .order_by(DepositRequest.updated_at.desc())
+        .limit(20)
+        .all()
+    )
+    return render_template("admin_deposits.html", page_title="Deposits", pending=pending, recent=recent)
 
 @admin_bp.post("/deposits/<int:dep_id>/<string:action>", endpoint="deposit_mark")
 @login_required
@@ -535,10 +594,16 @@ def deposit_mark(dep_id: int, action: str):
     if action == "loaded":
         dep.status = "LOADED"
         dep.loaded_at = datetime.utcnow()
+        # record who loaded (if your model has this column)
+        if hasattr(dep, "loaded_by"):
+            dep.loaded_by = current_user.id
+
+        # wallet credit (optional)
         if dep.amount and dep.user_id:
             wallet = PlayerBalance.query.filter_by(user_id=dep.user_id).first()
             if wallet:
-                wallet.balance = (wallet.balance or 0) + dep.amount
+                wallet.balance = (wallet.balance or 0) + int(dep.amount or 0)
+
         db.session.commit()
 
         if dep.user_id:
