@@ -1,4 +1,3 @@
-# player_bp.py
 from datetime import datetime
 import re
 import random
@@ -21,7 +20,15 @@ from models import (
     notify,
 )
 
+# ---------------------------------------------
+# Blueprints
+# ---------------------------------------------
+# Existing player blueprint (kept so nothing breaks)
 player_bp = Blueprint("playerbp", __name__, url_prefix="/player")
+
+# NEW: Clean, no-prefix blueprint for short professional URLs
+# Register this in app.py:  app.register_blueprint(short_bp)
+short_bp = Blueprint("short_bp", __name__, url_prefix="")
 
 # ---------- tiny kv fallback (no migration needed) ----------
 def _ensure_kv():
@@ -110,6 +117,52 @@ PROMO1_ALIASES = ("promo_line1", "news_line1", "ticker_line1", "headline1", "new
 PROMO2_ALIASES = ("promo_line2", "news_line2", "ticker_line2", "headline2", "news2")
 TREND_ALIASES  = ("trending_game_ids", "trending_ids", "trending_csv", "trending")
 
+# ---------- small internal render helpers (used by both blueprints) ----------
+def _render_deposit_step1(preselect_game_id: int | None):
+    if not _player_like():
+        return abort(403)
+    games = Game.query.filter_by(is_active=True).order_by(Game.name.asc()).all()
+    return render_template(
+        "player_deposit_step1.html",
+        games=games,
+        preselect_game_id=preselect_game_id,
+        page_title="Deposit • Step 1"
+    )
+
+def _render_deposit_step2(game_id: int | None, method: str, amount: int):
+    if not _player_like():
+        return abort(403)
+    if not amount or amount <= 0:
+        flash("Start over and enter a valid amount.", "error")
+        return redirect(url_for("playerbp.deposit_step1"))
+    method = (method or "CRYPTO").upper()
+    if method not in ("CRYPTO", "CHIME"):
+        flash("Invalid payment method.", "error")
+        return redirect(url_for("playerbp.deposit_step1"))
+    game = db.session.get(Game, game_id) if game_id else None
+    settings = _get_settings()
+    return render_template(
+        "player_deposit_step2.html",
+        amount=amount,
+        method=method,
+        game=game,
+        settings=settings,
+        page_title="Deposit • Step 2"
+    )
+
+def _render_withdraw(game_id: int | None):
+    if not _player_like():
+        return abort(403)
+    settings = _get_settings()
+    games = Game.query.filter_by(is_active=True).order_by(Game.name.asc()).all()
+    return render_template(
+        "player_withdraw.html",
+        settings=settings,
+        games=games,
+        preselect_game_id=game_id,
+        page_title="Withdraw • NeonSpire Casino"
+    )
+
 # ---------- landing ----------
 @player_bp.get("")
 @login_required
@@ -174,7 +227,7 @@ def player_dashboard():
                 trending_games.append(by_id[gid])
 
     return render_template(
-        "dashboard_player.html",  # <- actual template name in your project
+        "dashboard_player.html",  # <- your template
         page_title="Player Dashboard • NeonSpire Casino",
         wallet=wallet,
         games=games,
@@ -205,7 +258,7 @@ def request_game_account(game_id: int):
     )
     if exists:
         flash("You already have an open request for this game.", "error")
-        return redirect(url_for("index"))  # redirect to lobby
+        return redirect(url_for("index"))
 
     req = GameAccountRequest(
         user_id=current_user.id,
@@ -222,17 +275,14 @@ def request_game_account(game_id: int):
         notify(staff.id, f"New game access request: {game.name} by {pname}")
 
     flash("Request submitted. You’ll receive credentials shortly.", "success")
-    return redirect(url_for("index"))  # show banner only on lobby
+    return redirect(url_for("index"))
 
-# =============  DEPOSIT — 2 steps  =============
+# =============  LEGACY DEPOSIT — 2 steps (kept)  =============
 @player_bp.get("/deposit/step1")
 @login_required
 def deposit_step1():
-    if not _player_like():
-        return abort(403)
-    games = Game.query.filter_by(is_active=True).order_by(Game.name.asc()).all()
     pre_id = request.args.get("game_id", type=int)
-    return render_template("player_deposit_step1.html", games=games, preselect_game_id=pre_id, page_title="Deposit • Step 1")
+    return _render_deposit_step1(pre_id)
 
 @player_bp.post("/deposit/step1")
 @login_required
@@ -257,22 +307,16 @@ def deposit_step1_post():
         if not g or not g.is_active:
             flash("Selected game is not available.", "error")
             return redirect(url_for("playerbp.deposit_step1"))
-    return redirect(url_for("playerbp.deposit_step2", amount=amount, method=method, game_id=game_id))
+    # redirect to CLEAN step2 path:
+    return redirect(url_for("short_bp.deposit_step2_clean", game_id=game_id or 0, method=method, amount=amount))
 
 @player_bp.get("/deposit/step2")
 @login_required
 def deposit_step2():
-    if not _player_like():
-        return abort(403)
     amount = request.args.get("amount", type=int)
     method = (request.args.get("method") or "CRYPTO").upper()
     game_id = request.args.get("game_id", type=int)
-    if not amount or amount <= 0 or method not in ("CRYPTO", "CHIME"):
-        flash("Start over and enter a valid amount & method.", "error")
-        return redirect(url_for("playerbp.deposit_step1"))
-    game = db.session.get(Game, game_id) if game_id else None
-    settings = _get_settings()
-    return render_template("player_deposit_step2.html", amount=amount, method=method, game=game, settings=settings, page_title="Deposit • Step 2")
+    return _render_deposit_step2(game_id, method, amount)
 
 @player_bp.post("/deposit/submit")
 @login_required
@@ -316,15 +360,11 @@ def deposit_submit():
     flash("Deposit submitted. We’ll notify you once it’s loaded.", "success")
     return redirect(url_for("playerbp.player_dashboard"))
 
-# =============  WITHDRAW (manual math)  =============
+# =============  WITHDRAW (kept)  =============
 @player_bp.get("/withdraw")
 @login_required
 def withdraw_get():
-    if not _player_like():
-        return abort(403)
-    settings = _get_settings()
-    games = Game.query.filter_by(is_active=True).order_by(Game.name.asc()).all()
-    return render_template("player_withdraw.html", settings=settings, games=games, page_title="Withdraw • NeonSpire Casino")
+    return _render_withdraw(game_id=None)
 
 @player_bp.post("/withdraw")
 @login_required
@@ -482,7 +522,7 @@ def referral_home():
                                page_title="Referral • NeonSpire Casino",
                                code=rc.code,
                                link=share_url)
-    # Inline fallback (keeps app working even without a template file)
+    # Inline fallback
     return render_template_string("""
     {% extends "base.html" %}
     {% block content %}
@@ -535,17 +575,105 @@ def referral_new_code():
 @player_bp.get("/ref/<string:code>")
 def referral_landing(code: str):
     """
-    Public landing for a referral link. We don't require login here.
-    For now, just bounce to /register with ?ref=CODE so the flow can
-    record it on signup (or staff can see it in chat/support).
+    Public landing for a referral link (kept under /player).
     """
     code = (code or "").strip().upper()
     rc = ReferralCode.query.filter_by(code=code).first()
     if not rc:
         flash("Referral code not found.", "error")
         return redirect(url_for("auth.register_get"))
-    # Increment basic stats so employees can see performance later
-    rc.uses = (rc.uses or 0) + 1
-    db.session.commit()
-    # forward to register with the ref param
+    # (Optional) track usage
+    if hasattr(rc, "uses"):
+        rc.uses = (rc.uses or 0) + 1
+        db.session.commit()
     return redirect(url_for("auth.register_get") + f"?ref={code}")
+
+# -----------------------------------------------------------
+# CLEAN, SHORT ROUTES (no /player prefix) via short_bp
+# -----------------------------------------------------------
+
+# Your existing clean routes (kept)
+@short_bp.get("/deposit/<int:game_id>", endpoint="deposit_step1_clean")
+@login_required
+def deposit_step1_clean(game_id: int):
+    g = db.session.get(Game, game_id)
+    if not g or not g.is_active:
+        flash("Game not available.", "error")
+        return redirect(url_for("index"))
+    return _render_deposit_step1(preselect_game_id=game_id)
+
+@short_bp.get("/deposit/<int:game_id>/step2/<string:method>/<int:amount>", endpoint="deposit_step2_clean")
+@login_required
+def deposit_step2_clean(game_id: int, method: str, amount: int):
+    return _render_deposit_step2(game_id=game_id, method=method, amount=amount)
+
+@short_bp.get("/withdraw/<int:game_id>", endpoint="withdraw_clean")
+@login_required
+def withdraw_clean(game_id: int):
+    g = db.session.get(Game, game_id)
+    if not g or not g.is_active:
+        flash("Game not available.", "error")
+        return redirect(url_for("index"))
+    return _render_withdraw(game_id=game_id)
+
+@short_bp.get("/logins", endpoint="logins_clean")
+@login_required
+def logins_clean():
+    return accounts_page()
+
+# -------- EXTRA short aliases you requested (do not break anything) --------
+# 1) /dep  (Deposit Step 1 - no preselect)
+@short_bp.get("/dep")
+@login_required
+def dep_root():
+    return redirect(url_for("playerbp.deposit_step1"))
+
+# 1b) /dep/<game_id> (Deposit Step 1 with preselect)
+@short_bp.get("/dep/<int:game_id>")
+@login_required
+def dep_with_game(game_id: int):
+    # just reuse clean deposit step1
+    return redirect(url_for("short_bp.deposit_step1_clean", game_id=game_id))
+
+# 2) /dep/<method>?amount=&game_id=   (Deposit Step 2 short)
+#    Example: /dep/CRYP?amount=10&game_id=12
+@short_bp.get("/dep/<string:method>")
+@login_required
+def dep_method_short(method: str):
+    amount = request.args.get("amount", type=int)
+    game_id = request.args.get("game_id", type=int)
+    if not amount or amount <= 0:
+        flash("Enter a valid amount.", "error")
+        return redirect(url_for("playerbp.deposit_step1"))
+    if game_id:
+        g = db.session.get(Game, game_id)
+        if not g or not g.is_active:
+            flash("Selected game is not available.", "error")
+            return redirect(url_for("playerbp.deposit_step1"))
+    return redirect(url_for("short_bp.deposit_step2_clean",
+                            game_id=game_id or 0, method=method.upper(), amount=amount))
+
+# 3) /withd  (Withdraw page — optional ?game_id=)
+@short_bp.get("/withd")
+@login_required
+def withd_short():
+    game_id = request.args.get("game_id", type=int)
+    if game_id:
+        return redirect(url_for("short_bp.withdraw_clean", game_id=game_id))
+    return _render_withdraw(game_id=None)
+
+# 4) /log   (My Logins)
+@short_bp.get("/log")
+@login_required
+def log_short():
+    return redirect(url_for("playerbp.accounts_page"))
+
+# 5) /reg   (Register)
+@short_bp.get("/reg")
+def reg_short():
+    return redirect(url_for("auth.register_get"))
+
+# 6) /lob   (Lobby)
+@short_bp.get("/lob")
+def lob_short():
+    return redirect(url_for("index"))

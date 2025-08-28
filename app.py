@@ -1,6 +1,5 @@
-# app.py
 import os
-from flask import Flask, render_template
+from flask import Flask, render_template, redirect, url_for  # redirect, url_for needed for short aliases
 from dotenv import load_dotenv
 from flask_login import LoginManager, current_user
 from sqlalchemy import text, inspect as sqla_inspect
@@ -24,7 +23,7 @@ from models import (
     ChatMessage,
     DMThread,
     DMMessage,
-    ReferralCode,  # NEW: ensures referral_codes table is created
+    ReferralCode,  # ensures referral_codes table is created
 )
 
 # blueprints
@@ -33,7 +32,7 @@ from dashboard import dash_bp
 from admin_bp import admin_bp
 from employee_bp import employee_bp
 from notifications import notify_bp
-from player_bp import player_bp  # player features live on /player
+from player_bp import player_bp, short_bp  # <-- import short_bp too!
 
 # (optional) live chat blueprint – only registers if present
 try:
@@ -169,9 +168,28 @@ def create_app():
     app.register_blueprint(admin_bp)
     app.register_blueprint(employee_bp)
     app.register_blueprint(notify_bp)
-    app.register_blueprint(player_bp)
+    app.register_blueprint(player_bp)   # legacy /player/...
+    app.register_blueprint(short_bp)    # clean   /deposit/..., /withdraw/..., /logins
     if chat_bp:
         app.register_blueprint(chat_bp)
+
+    # ------------------ SHORT, PROFESSIONAL ALIASES ------------------
+    # Safe (idempotent) registration to avoid "overwriting endpoint" errors on reloads
+    def _add_alias(rule: str, endpoint: str, view_func):
+        if endpoint in app.view_functions:
+            return
+        app.add_url_rule(rule, endpoint=endpoint, view_func=view_func, methods=["GET"])
+
+    _add_alias("/lob",  "short_bp.lob_short",   lambda: redirect(url_for("index")))
+    _add_alias("/log",  "short_bp.log_short",   lambda: redirect(url_for("playerbp.accounts_page")))
+    _add_alias("/reg",  "short_bp.reg_short",   lambda: redirect(url_for("auth.register_get")))
+    _add_alias("/dep",  "short_bp.dep_short",   lambda: redirect(url_for("playerbp.deposit_step1")))
+    _add_alias(
+        "/dep/<string:method>",
+        "short_bp.dep_short_method",
+        lambda method: redirect(url_for("playerbp.deposit_step1", method=method.upper())),
+    )
+    _add_alias("/withd", "short_bp.withd_short", lambda: redirect(url_for("playerbp.withdraw_get")))
 
     # ------------------ health ------------------
     @app.get("/health")
@@ -312,6 +330,53 @@ def create_app():
             _add_col("ALTER TABLE users ADD COLUMN email_verified_at DATETIME")
         if not _has_col("users", "promo_seen"):
             _add_col("ALTER TABLE users ADD COLUMN promo_seen BOOLEAN DEFAULT 0")
+
+        # --- who issued player logins / who approved requests (for admin dashboards) ---
+        if not _has_col("game_accounts", "issued_by_id"):
+            _add_col(
+                "ALTER TABLE game_accounts ADD COLUMN issued_by_id INTEGER",
+                "ALTER TABLE game_accounts ADD COLUMN IF NOT EXISTS issued_by_id INTEGER",
+                "ALTER TABLE game_accounts ADD COLUMN issued_by_id INT NULL",
+            )
+        if not _has_col("game_accounts", "issued_at"):
+            _add_col(
+                "ALTER TABLE game_accounts ADD COLUMN issued_at DATETIME",
+                "ALTER TABLE game_accounts ADD COLUMN IF NOT EXISTS issued_at TIMESTAMP",
+                "ALTER TABLE game_accounts ADD COLUMN issued_at DATETIME NULL",
+            )
+        if not _has_col("game_accounts", "request_id"):
+            _add_col(
+                "ALTER TABLE game_accounts ADD COLUMN request_id INTEGER",
+                "ALTER TABLE game_accounts ADD COLUMN IF NOT EXISTS request_id INTEGER",
+                "ALTER TABLE game_accounts ADD COLUMN request_id INT NULL",
+            )
+
+        if not _has_col("game_account_requests", "approved_by_id"):
+            _add_col(
+                "ALTER TABLE game_account_requests ADD COLUMN approved_by_id INTEGER",
+                "ALTER TABLE game_account_requests ADD COLUMN IF NOT EXISTS approved_by_id INTEGER",
+                "ALTER TABLE game_account_requests ADD COLUMN approved_by_id INT NULL",
+            )
+        if not _has_col("game_account_requests", "handled_by"):
+            _add_col(
+                "ALTER TABLE game_account_requests ADD COLUMN handled_by INTEGER",
+                "ALTER TABLE game_account_requests ADD COLUMN IF NOT EXISTS handled_by INTEGER",
+                "ALTER TABLE game_account_requests ADD COLUMN handled_by INT NULL",
+            )
+        if not _has_col("game_account_requests", "approved_at"):
+            _add_col(
+                "ALTER TABLE game_account_requests ADD COLUMN approved_at DATETIME",
+                "ALTER TABLE game_account_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP",
+                "ALTER TABLE game_account_requests ADD COLUMN approved_at DATETIME NULL",
+            )
+
+        # Optional: who loaded a deposit (useful in admin reports)
+        if not _has_col("deposit_requests", "loaded_by"):
+            _add_col(
+                "ALTER TABLE deposit_requests ADD COLUMN loaded_by INTEGER",
+                "ALTER TABLE deposit_requests ADD COLUMN IF NOT EXISTS loaded_by INTEGER",
+                "ALTER TABLE deposit_requests ADD COLUMN loaded_by INT NULL",
+            )
 
         # --- payment_settings social links & promo lines ---
         ps_cols = {c["name"] for c in insp.get_columns("payment_settings")}

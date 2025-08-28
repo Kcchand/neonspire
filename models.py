@@ -41,6 +41,7 @@ class User(db.Model, UserMixin):
     def __repr__(self) -> str:
         return f"<User {self.id} {self.email} {self.role} verified={self.email_verified}>"
 
+
 # ========================= One-time tokens =========================
 class EmailToken(db.Model):
     """
@@ -98,6 +99,7 @@ class PasswordResetToken(db.Model):
         db.session.commit()
         return t
 
+
 # ========================= Settings =========================
 class PaymentSettings(db.Model):
     __tablename__ = "payment_settings"
@@ -132,6 +134,7 @@ class PaymentSettings(db.Model):
 
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
 # ========================= Games =========================
 class Game(db.Model):
     __tablename__ = "games"
@@ -145,6 +148,7 @@ class Game(db.Model):
     is_active = db.Column(db.Boolean, default=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
 # ========================= Wallet =========================
 class PlayerBalance(db.Model):
     __tablename__ = "player_balances"
@@ -153,6 +157,7 @@ class PlayerBalance(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), unique=True, nullable=False, index=True)
     balance = db.Column(db.Integer, default=0)  # store in smallest unit
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 # ========================= Deposits =========================
 class DepositRequest(db.Model):
@@ -173,6 +178,7 @@ class DepositRequest(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
 # ========================= Withdrawals =========================
 class WithdrawRequest(db.Model):
     __tablename__ = "withdraw_requests"
@@ -189,6 +195,7 @@ class WithdrawRequest(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
 # ========================= Game Access Requests =========================
 class GameAccountRequest(db.Model):
     __tablename__ = "game_account_requests"
@@ -196,23 +203,42 @@ class GameAccountRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     game_id = db.Column(db.Integer, db.ForeignKey("games.id"), nullable=False, index=True)
-    status = db.Column(db.String(20), default="PENDING", index=True)  # PENDING | IN_PROGRESS | PROVIDED | REJECTED
+
+    # PENDING | IN_PROGRESS | PROVIDED | APPROVED | REJECTED (we allow APPROVED for dashboards)
+    status = db.Column(db.String(20), default="PENDING", index=True)
+
     note = db.Column(db.String(300), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # NEW: who is handling / who approved (needed for admin dashboard)
+    handled_by     = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    approved_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    approved_at    = db.Column(db.DateTime, nullable=True)
+
 
 # ========================= Issued Game Accounts =========================
 class GameAccount(db.Model):
     __tablename__ = "game_accounts"
 
     id = db.Column(db.Integer, primary_key=True)
-    request_id = db.Column(db.Integer, db.ForeignKey("game_account_requests.id"), nullable=False, index=True)
+
+    # make request_id nullable=True for legacy rows; views handle presence if available
+    request_id = db.Column(db.Integer, db.ForeignKey("game_account_requests.id"), nullable=True, index=True)
+
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     game_id = db.Column(db.Integer, db.ForeignKey("games.id"), nullable=False, index=True)
+
     account_username = db.Column(db.String(120), nullable=False)
     account_password = db.Column(db.String(120), nullable=False)
     extra = db.Column(db.String(300), default="")
+
+    # who issued this login (so admin dashboard can show "Issued By")
+    issued_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    issued_at    = db.Column(db.DateTime, nullable=True)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 
 # ========================= Notifications =========================
 class Notification(db.Model):
@@ -224,10 +250,12 @@ class Notification(db.Model):
     is_read = db.Column(db.Boolean, default=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
+
 def notify(user_id: int, message: str):
     n = Notification(user_id=user_id, message=message, is_read=False)
     db.session.add(n)
     db.session.commit()
+
 
 # ========================= Broadcast Chat (legacy/optional) =========================
 class ChatMessage(db.Model):
@@ -252,6 +280,7 @@ class ChatMessage(db.Model):
             "created_at": self.created_at.isoformat() + "Z",
         }
 
+
 # ========================= Private DM Chat (player ↔ employee) =========================
 class DMThread(db.Model):
     __tablename__ = "dm_threads"
@@ -266,6 +295,7 @@ class DMThread(db.Model):
 
     def __repr__(self) -> str:
         return f"<DMThread {self.id} player={self.player_id} emp={self.employee_id} {self.status}>"
+
 
 class DMMessage(db.Model):
     __tablename__ = "dm_messages"
@@ -287,6 +317,7 @@ class DMMessage(db.Model):
             "created_at": self.created_at.isoformat() + "Z",
         }
 
+
 # ========================= Referrals (NEW) =========================
 class ReferralCode(db.Model):
     __tablename__ = "referral_codes"
@@ -296,6 +327,7 @@ class ReferralCode(db.Model):
     code = db.Column(db.String(16), unique=True, nullable=False, index=True)  # e.g., AB1234
     clicks = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
 
 def _generate_ref_code_base(name: str) -> str:
     """
@@ -307,6 +339,7 @@ def _generate_ref_code_base(name: str) -> str:
     if len(base) < 2:
         base = (base + "PL")[:2]
     return base
+
 
 def get_or_create_referral_for_user(user_id: int) -> ReferralCode:
     """

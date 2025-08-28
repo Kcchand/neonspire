@@ -242,8 +242,16 @@
           <div class="t-row ids-row">
             <div class="ids-player">{{ r.player }}</div>
             <div class="ids-game">{{ r.game }}</div>
-            <div class="ids-employee">{{ r.employee }}</div>
-            <div class="muted">{% if r.created_at %}{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}</div>
+            <div class="ids-employee">
+              {% if r.employee and r.employee|string and r.employee != 'N/A' %}
+                {{ r.employee }}
+              {% else %}
+                <span class="muted">N/A</span>
+              {% endif %}
+            </div>
+            <div class="muted">
+              {% if r.created_at %}{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}
+            </div>
           </div>
           {% endfor %}
         </div>

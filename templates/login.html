@@ -35,25 +35,10 @@
 </style>
 
 <div class="auth-wrap">
-  <!-- Left: Login form -->
+  <!-- Left: Login form (no local flash rendering — base.html handles it) -->
   <div class="auth-card">
     <h1 class="auth-title">Sign In</h1>
     <p class="auth-sub">Enter your credentials to continue.</p>
-
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        <div class="grid">
-          {% for category, message in messages %}
-            <div class="card" style="border-color:
-              {% if category == 'success' %}rgba(18,217,161,.45)
-              {% elif category == 'error' %}rgba(255,93,93,.5)
-              {% else %}rgba(255,255,255,.12){% endif %}; background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));">
-              {{ message }}
-            </div>
-          {% endfor %}
-        </div>
-      {% endif %}
-    {% endwith %}
 
     <form method="post" action="{{ url_for('auth.login_post') }}" class="auth-form">
       <!-- keep next param so we can redirect after successful login -->

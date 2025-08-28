@@ -30,26 +30,10 @@
 </style>
 
 <div class="auth-wrap">
-  <!-- Left: Register form -->
+  <!-- Left: Register form (no local flash rendering; base.html shows messages once) -->
   <div class="auth-card">
     <h1 class="auth-title">Create Account</h1>
     <p class="auth-sub">Join and start playing in minutes.</p>
-
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        <div class="grid">
-          {% for category, message in messages %}
-            <div class="card" style="border-color:
-              {% if category == 'success' %}rgba(18,217,161,.45)
-              {% elif category == 'error' %}rgba(255,93,93,.5)
-              {% else %}rgba(255,255,255,.12){% endif %};
-              background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));">
-              {{ message }}
-            </div>
-          {% endfor %}
-        </div>
-      {% endif %}
-    {% endwith %}
 
     <form id="registerForm" method="post" action="{{ url_for('auth.register_post') }}" class="auth-form">
       <div class="fg">
@@ -63,8 +47,8 @@
       </div>
 
       <div class="fg">
-        <label for="mobile">Mobile Number</label>
-        <input id="mobile" name="mobile" type="tel" placeholder="+1 555 123 4567" required>
+        <label for="mobile">Mobile Number <span class="muted">(optional)</span></label>
+        <input id="mobile" name="mobile" type="tel" placeholder="+1 555 123 4567">
       </div>
 
       <div class="fg">

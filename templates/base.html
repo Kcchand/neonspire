@@ -10,21 +10,18 @@
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/logo.png') }}">
   <meta name="theme-color" content="#0ae7d8" />
 
-  <!-- Consistent font across desktop/tablet/mobile -->
+  <!-- Consistent font -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 
-  {# cache-bust CSS so users don’t keep stale assets #}
+  <!-- cache-bust CSS so users don’t keep stale assets -->
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}?v=dm2">
 
   <style>
-    /* tiny helpers just for the brand line */
     .brand { display:flex; gap:10px; align-items:center; text-decoration:none; color:inherit; font-weight:900; font-size:22px }
     .brand-logo { height:30px; width:auto; display:block; filter: drop-shadow(0 0 6px rgba(0,255,233,.45)); }
-    @media (max-width:480px){
-      .brand-text { font-size:18px }
-    }
+    @media (max-width:480px){ .brand-text { font-size:18px } }
   </style>
 </head>
 
@@ -34,7 +31,7 @@
   <header class="nav" style="position:sticky;top:0;z-index:50;background:rgba(0,0,0,.25);backdrop-filter:blur(8px);border-bottom:1px solid var(--stroke)">
     <div class="shell nav-inner" style="display:flex;align-items:center;justify-content:space-between;height:58px">
       <!-- Brand (logo + title) -->
-      <a href="{{ url_for('index') }}" class="brand" aria-label="NeonSpire Casino">
+      <a href="{{ url_for('short_bp.lob_short') }}" class="brand" aria-label="NeonSpire Casino">
         <img class="brand-logo" src="{{ url_for('static', filename='img/logo.png') }}" alt="NeonSpire Casino">
         <span class="brand-text">NeonSpire Casino</span>
       </a>
@@ -42,7 +39,7 @@
       <!-- Right side -->
       <nav class="nav-links" style="display:flex;align-items:center;gap:10px">
         {% if not current_user.is_authenticated or current_user.role == 'PLAYER' %}
-          <a class="pill" href="{{ url_for('index') }}">Lobby</a>
+          <a class="pill" href="{{ url_for('short_bp.lob_short') }}">Lobby</a>
         {% endif %}
 
         {% if current_user.is_authenticated %}
@@ -51,7 +48,7 @@
           {% elif current_user.role == 'EMPLOYEE' %}
             <a class="pill" href="{{ url_for('employeebp.employee_home') }}">Employee</a>
           {% else %}
-            <a class="pill" href="{{ url_for('playerbp.accounts_page') }}">My Logins</a>
+            <a class="pill" href="{{ url_for('short_bp.log_short') }}">My Logins</a>
           {% endif %}
 
           <a class="pill" href="{{ url_for('notifybp.list_notifications') }}">🔔 {{ unread_count or 0 }}</a>
@@ -62,7 +59,7 @@
           <a class="btn btn-ghost" href="{{ url_for('auth.logout') }}">Logout</a>
         {% else %}
           <a class="pill" href="{{ url_for('auth.login_get') }}">Login</a>
-          <a class="btn btn-primary" href="{{ url_for('auth.register_get') }}">Register</a>
+          <a class="btn btn-primary" href="{{ url_for('short_bp.reg_short') }}">Register</a>
         {% endif %}
 
         <!-- Dark mode toggle -->
@@ -113,7 +110,6 @@
     <span class="muted">©Gambling license from Curaçao </span>
   </footer>
 
-  {# ========= Private DM widget (players only). ========= #}
   {% if current_user.is_authenticated and current_user.role == 'PLAYER' %}
     {% include "_dm_widget.html" %}
   {% endif %}
@@ -135,7 +131,7 @@
     })();
   </script>
 
-  {# cache-bust JS to avoid legacy /chat/messages callers #}
+  <!-- cache-bust JS to avoid legacy /chat/messages callers -->
   <script src="{{ url_for('static', filename='js/main.js') }}?v=dm2"></script>
 </body>
 </html>

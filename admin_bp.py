@@ -8,8 +8,8 @@ from flask import (
     url_for, flash, abort, current_app
 )
 from flask_login import login_required, current_user
-from sqlalchemy import text, func
-from sqlalchemy import inspect as sqla_inspect  # <-- SQLAlchemy 2.x safe table check
+from sqlalchemy import text, func, or_
+from sqlalchemy import inspect as sqla_inspect  # SQLAlchemy 2.x safe table check
 
 from models import (
     db,
@@ -145,6 +145,24 @@ def _maybe_set(obj, attr: str, value):
     if hasattr(obj, attr):
         setattr(obj, attr, value)
 
+# Resolve employee id from a GameAccount across schema variants
+def _emp_id_from_account(acc: GameAccount):
+    for col in ("issued_by_id", "issued_by", "created_by", "staff_id"):
+        if hasattr(acc, col):
+            val = getattr(acc, col, None)
+            if val:
+                return val
+    return None
+
+# Resolve "issued at" / created timestamp for display
+def _when_from_account(acc: GameAccount):
+    for col in ("issued_at", "created_at", "updated_at"):
+        if hasattr(acc, col):
+            val = getattr(acc, col, None)
+            if val:
+                return val
+    return None
+
 # -------------------- Admin Home --------------------
 
 @admin_bp.get("/")
@@ -192,14 +210,34 @@ def admin_home():
     ids_by_emp = {}
     try:
         insp = sqla_inspect(db.engine)
+
+        # Count from GameAccountRequest if present
         if "game_account_requests" in insp.get_table_names():
             q = GameAccountRequest.query.filter(
                 GameAccountRequest.status.in_(["PROVIDED", "APPROVED"])
             )
             for r in q.all():
-                emp_id = getattr(r, "handled_by", None) or getattr(r, "approved_by", None)
+                emp_id = (
+                    getattr(r, "approved_by_id", None)
+                    or getattr(r, "approved_by", None)
+                    or getattr(r, "handled_by", None)
+                )
                 if emp_id:
                     ids_by_emp[emp_id] = ids_by_emp.get(emp_id, 0) + 1
+
+        # Also count directly from GameAccount across multiple possible columns
+        if "game_accounts" in insp.get_table_names():
+            for col_name in ("issued_by_id", "issued_by", "created_by", "staff_id"):
+                if hasattr(GameAccount, col_name):
+                    col = getattr(GameAccount, col_name)
+                    for emp_id, cnt in (
+                        db.session.query(col, func.count(GameAccount.id))
+                        .filter(col.isnot(None))
+                        .group_by(col)
+                        .all()
+                    ):
+                        ids_by_emp[emp_id] = ids_by_emp.get(emp_id, 0) + int(cnt or 0)
+
     except Exception:
         db.session.rollback()
 
@@ -216,7 +254,7 @@ def admin_home():
         if g:
             players_per_game.append({"game": g, "count": cnt})
 
-    # Latest IDs issued
+    # Latest IDs issued (resolve staff name robustly)
     latest_ids = []
     rows = (
         db.session.query(GameAccount, Game.name.label("game_name"))
@@ -225,25 +263,34 @@ def admin_home():
         .limit(15)
         .all()
     )
+
     def _name(u: User | None) -> str:
         return (u.name or u.email or f"User #{u.id}").strip() if u else "—"
 
     for acc, gname in rows:
-        emp_name = "N/A"
+        # player
         user = db.session.get(User, getattr(acc, "user_id", None) or 0)
-        req_id = getattr(acc, "request_id", None)
-        if req_id:
-            req = db.session.get(GameAccountRequest, req_id)
-            if req:
-                emp_id = getattr(req, "handled_by", None) or getattr(req, "approved_by", None)
-                if emp_id:
-                    emp = db.session.get(User, emp_id)
-                    emp_name = _name(emp)
+
+        # figure out staff who issued (account columns -> linked request fallbacks)
+        emp_id = _emp_id_from_account(acc)
+        if not emp_id:
+            req_id = getattr(acc, "request_id", None)
+            if req_id:
+                req = db.session.get(GameAccountRequest, req_id)
+                if req:
+                    emp_id = (
+                        getattr(req, "approved_by_id", None)
+                        or getattr(req, "approved_by", None)
+                        or getattr(req, "handled_by", None)
+                    )
+
+        emp_name = _name(db.session.get(User, emp_id) if emp_id else None) if emp_id else "N/A"
+
         latest_ids.append({
             "player": _name(user),
             "game": gname,
             "employee": emp_name,
-            "created_at": getattr(acc, "created_at", None),
+            "created_at": _when_from_account(acc),
         })
 
     # ---- Promo + Trending values (read from columns OR kv fallback) ----

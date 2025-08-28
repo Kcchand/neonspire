@@ -4,7 +4,7 @@ from collections import defaultdict
 
 from flask import Blueprint, render_template, render_template_string, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
-from sqlalchemy import text, or_, func  # <-- func for aggregates
+from sqlalchemy import text, or_, func
 
 from models import (
     db,
@@ -14,8 +14,8 @@ from models import (
     GameAccount,
     GameAccountRequest,
     DepositRequest,
-    WithdrawRequest,   # manage cash-out requests
-    ReferralCode,      # <-- REFERRALS
+    WithdrawRequest,
+    ReferralCode,
     notify,
 )
 
@@ -32,7 +32,6 @@ def require_employee():
 
 
 def _display_name(user: User) -> str:
-    """Nicer names for notifications."""
     return (user.name or user.email or f"User #{user.id}").strip()
 
 
@@ -46,7 +45,6 @@ def _template_exists(name: str) -> bool:
 
 # ---------- tiny kv fallback (shared with admin) ----------
 def _ensure_kv():
-    """Create kv_store if it doesn't exist (works for sqlite/mysql/postgres)."""
     try:
         bind = db.session.get_bind()
         dialect = bind.dialect.name if bind else "sqlite"
@@ -64,7 +62,7 @@ def _ensure_kv():
                     `value` TEXT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """))
-        else:  # sqlite or others
+        else:
             db.session.execute(text("""
                 CREATE TABLE IF NOT EXISTS kv_store (
                     key TEXT PRIMARY KEY,
@@ -85,7 +83,6 @@ def _kv_get(k: str) -> str | None:
         return None
 
 def _backend_url_for(game: Game) -> str | None:
-    """Prefer Game.backend_url if present; otherwise read kv key game:{id}:backend_url."""
     val = getattr(game, "backend_url", None)
     if val:
         return val
@@ -93,7 +90,6 @@ def _backend_url_for(game: Game) -> str | None:
 
 
 def _refcodes_for_user_ids(user_ids):
-    """Return {user_id: 'AB1234'} for the provided user ids."""
     if not user_ids:
         return {}
     rows = ReferralCode.query.filter(ReferralCode.user_id.in_(list(set(user_ids)))).all()
@@ -104,17 +100,12 @@ def _refcodes_for_user_ids(user_ids):
 @employee_bp.get("/")
 @login_required
 def employee_home():
-    """
-    Employee landing with summary cards + recent players overview.
-    Shows: name, email, phone, referral code, #game accounts, last requested game, joined.
-    """
     pending_deposits  = DepositRequest.query.filter_by(status="PENDING").count()
     pending_requests  = GameAccountRequest.query.filter(
         GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"])
     ).count()
     pending_withdraws = WithdrawRequest.query.filter_by(status="PENDING").count()
 
-    # ---- Recent players (adjust limit as desired) ----
     recent_players = (
         User.query.filter_by(role="PLAYER")
         .order_by(User.created_at.desc())
@@ -123,10 +114,8 @@ def employee_home():
     )
     player_ids = [p.id for p in recent_players]
 
-    # Referral codes by user
     refcodes = _refcodes_for_user_ids(player_ids)
 
-    # # of issued game accounts per user
     accounts_count = defaultdict(int)
     if player_ids:
         for uid, cnt in (
@@ -137,10 +126,8 @@ def employee_home():
         ):
             accounts_count[uid] = int(cnt or 0)
 
-    # Last requested game per user
     last_req_by_user = {}
     if player_ids:
-        # subquery of latest request datetime per user
         sub = (
             db.session.query(
                 GameAccountRequest.user_id,
@@ -163,7 +150,6 @@ def employee_home():
 
     games_map = {g.id: g for g in Game.query.all()}
 
-    # Build rows for template
     player_rows = []
     for p in recent_players:
         g_last_id = last_req_by_user.get(p.id)
@@ -186,8 +172,8 @@ def employee_home():
         pending_deposits=pending_deposits,
         pending_requests=pending_requests,
         pending_withdraws=pending_withdraws,
-        players=player_rows,     # <-- for the Players table
-        games=games_map,         # optional (handy for links)
+        players=player_rows,
+        games=games_map,
     )
 
 
@@ -207,7 +193,6 @@ def deposits_list():
         .all()
     )
 
-    # Users map and referral codes so templates can display player + code
     user_ids = [d.user_id for d in (pending + recent) if d.user_id]
     users_map = {u.id: u for u in User.query.filter(User.id.in_(user_ids)).all()} if user_ids else {}
     refcodes = _refcodes_for_user_ids(user_ids)
@@ -218,11 +203,11 @@ def deposits_list():
         pending=pending,
         recent=recent,
         users=users_map,
-        refcodes=refcodes,   # <-- add to template context
+        refcodes=refcodes,
     )
 
 
-# New: Deposit detail page (shows proof + quick actions)
+# New: Deposit detail page
 @employee_bp.get("/deposits/<int:dep_id>", endpoint="deposit_detail")
 @login_required
 def deposit_detail(dep_id: int):
@@ -249,16 +234,12 @@ def deposit_detail(dep_id: int):
     if _template_exists("employee_deposit_detail.html"):
         return render_template("employee_deposit_detail.html", **ctx)
 
-    # Inline fallback template
-    return render_template_string("""
-    {% extends "base.html" %}
-    {% block content %}
+    return render_template_string("""{% extends "base.html" %}{% block content %}
     <div class="shell">
       <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
         <div class="h3">Deposit #{{ dep.id }}</div>
         <a class="btn" href="{{ url_for('employeebp.deposits_list') }}">← Back to Deposits</a>
       </div>
-
       <div class="panel">
         <div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
           <div>
@@ -276,34 +257,22 @@ def deposit_detail(dep_id: int):
             {% if dep.loaded_at %}<div><strong>Loaded at:</strong> {{ dep.loaded_at }}</div>{% endif %}
           </div>
         </div>
-
         {% if dep.proof_url %}
           <hr>
           <div>
             <div class="muted">Payment Proof</div>
-            <p>
-              <a class="btn" target="_blank" rel="noopener" href="{{ dep.proof_url }}">Open Proof</a>
-            </p>
+            <p><a class="btn" target="_blank" rel="noopener" href="{{ dep.proof_url }}">Open Proof</a></p>
             {% set is_img = dep.proof_url.lower().endswith(('.png','.jpg','.jpeg','.webp','.gif')) %}
-            {% if is_img %}
-              <div style="max-width:480px"><img src="{{ dep.proof_url }}" alt="Payment proof" style="max-width:100%;border-radius:10px"></div>
-            {% endif %}
+            {% if is_img %}<div style="max-width:480px"><img src="{{ dep.proof_url }}" alt="Payment proof" style="max-width:100%;border-radius:10px"></div>{% endif %}
           </div>
         {% endif %}
-
         <hr>
         <div style="display:flex;gap:8px">
-          <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=dep.id) }}">
-            <button class="btn btn-primary" type="submit">Approve &nbsp;✓</button>
-          </form>
-          <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=dep.id) }}">
-            <button class="btn" type="submit">Reject ✕</button>
-          </form>
+          <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=dep.id) }}"><button class="btn btn-primary" type="submit">Approve &nbsp;✓</button></form>
+          <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=dep.id) }}"><button class="btn" type="submit">Reject ✕</button></form>
         </div>
       </div>
-    </div>
-    {% endblock %}
-    """, **ctx)
+    </div>{% endblock %}""", **ctx)
 
 
 @employee_bp.post("/deposits/<int:dep_id>/loaded")
@@ -316,8 +285,9 @@ def deposits_loaded(dep_id: int):
 
     dep.status = "LOADED"
     dep.loaded_at = datetime.utcnow()
+    if hasattr(dep, "loaded_by"):
+        dep.loaded_by = current_user.id
 
-    # Credit wallet if available
     if dep.amount and dep.user_id:
         wallet = PlayerBalance.query.filter_by(user_id=dep.user_id).first()
         if wallet:
@@ -384,11 +354,10 @@ def requests_list():
         users=users,
         backend_urls=backend_urls,
         selected_game=None,
-        refcodes=refcodes,  # <-- provide referral codes here too
+        refcodes=refcodes,
     )
 
 
-# Filter by one game
 @employee_bp.get("/requests/game/<int:game_id>")
 @login_required
 def requests_list_by_game(game_id: int):
@@ -431,7 +400,7 @@ def requests_list_by_game(game_id: int):
         users=users,
         backend_urls=backend_urls,
         selected_game=game,
-        refcodes=refcodes,  # <-- provide referral codes
+        refcodes=refcodes,
     )
 
 
@@ -439,10 +408,11 @@ def requests_list_by_game(game_id: int):
 @login_required
 def requests_provide(req_id: int):
     """
-    Provide credentials or save progress on a request.
-    Supports 'action' in form:
-      - 'save'     -> mark IN_PROGRESS (no notification)
-      - 'approve'  -> save credentials & mark APPROVED (notify player)
+    Save credentials (or progress) for a request. On approve:
+    - ensure a GameAccount exists
+    - write the credentials
+    - ALWAYS stamp the issuer (so admin can see who created it)
+    - close the request and stamp approver/handler
     """
     req = db.session.get(GameAccountRequest, req_id)
     if not req:
@@ -454,32 +424,35 @@ def requests_provide(req_id: int):
     password = (request.form.get("password") or "").strip()
     note     = (request.form.get("note") or "").strip()
 
-    # If saving progress only, just mark IN_PROGRESS and optionally store note on req
+    # Save progress only
     if action == "save":
         req.status = "IN_PROGRESS"
         if hasattr(req, "note") and note:
             req.note = note
+        if hasattr(req, "handled_by"):
+            req.handled_by = current_user.id
+        if hasattr(req, "updated_at"):
+            req.updated_at = datetime.utcnow()
         db.session.commit()
         flash("Progress saved. Request marked IN_PROGRESS.", "success")
-        # return to the most relevant list
         if request.referrer and f"/requests/game/{req.game_id}" in request.referrer:
             return redirect(url_for("employeebp.requests_list_by_game", game_id=req.game_id))
         return redirect(url_for("employeebp.requests_list"))
 
-    # Default: approve (create/update GameAccount + APPROVED)
+    # Approve: create/update account
     acc = GameAccount.query.filter_by(user_id=req.user_id, game_id=req.game_id).first()
     if not acc:
         acc = GameAccount(user_id=req.user_id, game_id=req.game_id)
-        if hasattr(acc, "request_id"):
-            acc.request_id = req.id
-        if hasattr(acc, "created_at") and getattr(acc, "created_at", None) is None:
+        # ensure created_at for new rows if the column exists
+        if hasattr(acc, "created_at") and not getattr(acc, "created_at", None):
             acc.created_at = datetime.utcnow()
         db.session.add(acc)
-    else:
-        if hasattr(acc, "request_id") and (getattr(acc, "request_id", None) in (None, 0)):
-            acc.request_id = req.id
 
-    # username
+    # Always link request
+    if hasattr(acc, "request_id"):
+        acc.request_id = req.id
+
+    # credentials
     if hasattr(acc, "account_username"):
         acc.account_username = username
     elif hasattr(acc, "username"):
@@ -487,7 +460,6 @@ def requests_provide(req_id: int):
     elif hasattr(acc, "login"):
         acc.login = username
 
-    # password
     if hasattr(acc, "account_password"):
         acc.account_password = password
     elif hasattr(acc, "password"):
@@ -495,7 +467,7 @@ def requests_provide(req_id: int):
     elif hasattr(acc, "passcode"):
         acc.passcode = password
 
-    # extra / note on account
+    # note
     if hasattr(acc, "extra"):
         acc.extra = note
     elif hasattr(acc, "note"):
@@ -503,10 +475,25 @@ def requests_provide(req_id: int):
     if hasattr(req, "note") and note:
         req.note = note
 
-    # close the request
+    # 🔴 ALWAYS stamp issuer (so admin "Issued By" works)
+    if hasattr(acc, "issued_by_id"):
+        acc.issued_by_id = current_user.id
+    # always stamp time if the column exists
+    if hasattr(acc, "issued_at"):
+        acc.issued_at = datetime.utcnow()
+
+    # close request + stamp approver/handler variants
     req.status = "APPROVED"
-    if hasattr(req, "approved_at") and getattr(req, "approved_at", None) is None:
+    if hasattr(req, "approved_by_id"):
+        req.approved_by_id = current_user.id
+    if hasattr(req, "approved_by"):
+        req.approved_by = current_user.id
+    if hasattr(req, "handled_by"):
+        req.handled_by = current_user.id
+    if hasattr(req, "approved_at"):
         req.approved_at = datetime.utcnow()
+    if hasattr(req, "updated_at"):
+        req.updated_at = datetime.utcnow()
 
     db.session.commit()
 
@@ -533,6 +520,10 @@ def requests_reject(req_id: int):
     reason = (request.form.get("reason") or "").strip()
     if hasattr(req, "note") and reason:
         req.note = reason
+    if hasattr(req, "handled_by"):
+        req.handled_by = current_user.id
+    if hasattr(req, "updated_at"):
+        req.updated_at = datetime.utcnow()
 
     db.session.commit()
 
@@ -551,7 +542,7 @@ def requests_reject(req_id: int):
     return redirect(url_for("employeebp.requests_list"))
 
 
-# Quick link to open a game's backend (redirect).
+# Quick link to open a game's backend
 @employee_bp.get("/games/<int:game_id>/backend")
 @login_required
 def open_game_backend(game_id: int):
@@ -559,11 +550,9 @@ def open_game_backend(game_id: int):
     if not game:
         flash("Game not found.", "error")
         return redirect(url_for("employeebp.requests_list"))
-
     backend_url = _backend_url_for(game)
     if backend_url:
         return redirect(backend_url)
-
     flash("This game has no backend URL configured.", "error")
     return redirect(url_for("employeebp.requests_list_by_game", game_id=game_id))
 

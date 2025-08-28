@@ -6,19 +6,33 @@ from email.message import EmailMessage
 from datetime import datetime
 
 from flask import (
-    Blueprint, render_template, request, redirect, url_for, flash, render_template_string
+    Blueprint, render_template, request, redirect, url_for, render_template_string,
+    flash, session
 )
 from flask_login import login_user, logout_user, current_user, login_required
 
-from models import (
-    db, User, EmailToken, PasswordResetToken
-)
+from models import db, User, EmailToken, PasswordResetToken
 
 auth_bp = Blueprint("auth", __name__)
 
 # =========================================================
 # Helpers
 # =========================================================
+
+def flash_once(message: str, category: str = "message") -> None:
+    """
+    Deduplicates flashes within the same response cycle.
+    If a (category, message) pair already exists in session['_flashes'],
+    don't add it again. This prevents the double banner you saw.
+    """
+    try:
+        current = session.get("_flashes", [])
+        if (category, message) not in current:
+            flash(message, category)
+    except Exception:
+        # If anything odd with session, fall back to normal flash.
+        flash(message, category)
+
 
 def _is_safe_next(next_url: str) -> bool:
     """
@@ -136,13 +150,13 @@ def login_post():
 
     user = User.query.filter_by(email=email).first()
     if not user or not user.check_password(password):
-        flash("Invalid email or password.", "error")
+        flash_once("Invalid email or password.", "error")
         return redirect(url_for("auth.login_get"))
 
     # Enforce verified email before allowing login
     if not user.email_verified:
         _send_verification_email(user)  # silently re-send
-        flash("Please verify your email before signing in. We’ve sent a new link to your inbox.", "error")
+        flash_once("Please verify your email before signing in. We’ve sent a new link to your inbox.", "error")
         return redirect(url_for("auth.login_get"))
 
     login_user(user, remember=remember)
@@ -176,20 +190,20 @@ def register_post():
 
     # Basic validations
     if not name or not email or not password or not confirm:
-        flash("All fields are required.", "error")
+        flash_once("All fields are required.", "error")
         return redirect(url_for("auth.register_get"))
 
     if password != confirm:
-        flash("Passwords do not match.", "error")
+        flash_once("Passwords do not match.", "error")
         return redirect(url_for("auth.register_get"))
 
     if User.query.filter_by(email=email).first():
-        flash("Email already registered.", "error")
+        flash_once("Email already registered.", "error")
         return redirect(url_for("auth.register_get"))
 
     # Optional mobile format check (E.164-ish)
     if mobile and not re.fullmatch(r"^\+?[0-9]{7,15}$", mobile):
-        flash("Enter a valid mobile number (use country code, e.g. +15551234567).", "error")
+        flash_once("Enter a valid mobile number (use country code, e.g. +15551234567).", "error")
         return redirect(url_for("auth.register_get"))
 
     # Create PLAYER (unverified)
@@ -200,7 +214,7 @@ def register_post():
 
     # Send verification (UI shows one clean message — no dev link)
     _send_verification_email(u)
-    flash("Verification email sent. Please check your inbox to activate your account.", "success")
+    flash_once("Verification email sent. Please check your inbox to activate your account.", "success")
     return redirect(url_for("auth.login_get"))
 
 
@@ -208,12 +222,12 @@ def register_post():
 def verify_email():
     token = (request.args.get("token") or "").strip()
     if not token:
-        flash("Missing token.", "error")
+        flash_once("Missing token.", "error")
         return redirect(url_for("auth.login_get"))
 
     rec = EmailToken.query.filter_by(token=token, purpose="verify").first()
     if not rec:
-        flash("Invalid or expired token.", "error")
+        flash_once("Invalid or expired token.", "error")
         return redirect(url_for("auth.login_get"))
 
     if rec.expires_at and rec.expires_at < datetime.utcnow():
@@ -224,13 +238,13 @@ def verify_email():
         u = db.session.get(User, uid)
         if u:
             _send_verification_email(u)
-        flash("Verification link expired. We’ve sent a new one to your email.", "error")
+        flash_once("Verification link expired. We’ve sent a new one to your email.", "error")
         return redirect(url_for("auth.login_get"))
 
     # Mark verified
     u = db.session.get(User, rec.user_id)
     if not u:
-        flash("Account not found.", "error")
+        flash_once("Account not found.", "error")
         return redirect(url_for("auth.login_get"))
 
     u.email_verified = True
@@ -238,7 +252,7 @@ def verify_email():
     db.session.delete(rec)
     db.session.commit()
 
-    flash("Email verified! You can now sign in.", "success")
+    flash_once("Email verified! You can now sign in.", "success")
     return redirect(url_for("auth.login_get"))
 
 
@@ -252,15 +266,15 @@ def resend_verification():
 
     # Do not reveal whether a user exists
     if not user:
-        flash("If the account exists, a verification email will be sent.", "success")
+        flash_once("If the account exists, a verification email will be sent.", "success")
         return redirect(url_for("auth.login_get"))
 
     if user.email_verified:
-        flash("This email is already verified. Please sign in.", "success")
+        flash_once("This email is already verified. Please sign in.", "success")
         return redirect(url_for("auth.login_get"))
 
     _send_verification_email(user)
-    flash("Verification email sent. Please check your inbox.", "success")
+    flash_once("Verification email sent. Please check your inbox.", "success")
     return redirect(url_for("auth.login_get"))
 
 
@@ -268,7 +282,7 @@ def resend_verification():
 @login_required
 def logout():
     logout_user()
-    flash("Signed out.", "success")
+    flash_once("Signed out.", "success")
     return redirect(url_for("index"))
 
 
@@ -299,18 +313,18 @@ def forgot_get():
 def forgot_post():
     email = (request.form.get("email") or "").strip().lower()
     if not email:
-        flash("Enter your account email.", "error")
+        flash_once("Enter your account email.", "error")
         return redirect(url_for("auth.forgot_get"))
 
     user = User.query.filter_by(email=email).first()
     if not user:
         # Do not reveal account existence
-        flash("If the account exists, a reset link will be sent.", "success")
+        flash_once("If the account exists, a reset link will be sent.", "success")
         return redirect(url_for("auth.login_get"))
 
     token = PasswordResetToken.issue(user.id)
     _send_reset_email(user, token)
-    flash("Password reset link sent. Please check your email.", "success")
+    flash_once("Password reset link sent. Please check your email.", "success")
     return redirect(url_for("auth.login_get"))
 
 
@@ -318,7 +332,7 @@ def forgot_post():
 def reset_get():
     token = (request.args.get("token") or "").strip()
     if not token:
-        flash("Missing token.", "error")
+        flash_once("Missing token.", "error")
         return redirect(url_for("auth.login_get"))
 
     return render_template("reset.html", token=token) if _template_exists("reset.html") else render_template_string("""
@@ -347,34 +361,34 @@ def reset_post():
     cpw = request.form.get("confirm_password") or ""
 
     if not token_val or not pw or not cpw:
-        flash("All fields are required.", "error")
+        flash_once("All fields are required.", "error")
         return redirect(url_for("auth.login_get"))
 
     if pw != cpw:
-        flash("Passwords do not match.", "error")
+        flash_once("Passwords do not match.", "error")
         return redirect(url_for("auth.reset_get", token=token_val))
 
     rec = PasswordResetToken.query.filter_by(token=token_val, used_at=None).first()
     if not rec:
-        flash("Invalid or expired token.", "error")
+        flash_once("Invalid or expired token.", "error")
         return redirect(url_for("auth.login_get"))
 
     if rec.expires_at and rec.expires_at < datetime.utcnow():
         db.session.delete(rec)
         db.session.commit()
-        flash("Reset link expired. Please request a new one.", "error")
+        flash_once("Reset link expired. Please request a new one.", "error")
         return redirect(url_for("auth.forgot_get"))
 
     user = db.session.get(User, rec.user_id)
     if not user:
-        flash("Account not found.", "error")
+        flash_once("Account not found.", "error")
         return redirect(url_for("auth.login_get"))
 
     user.set_password(pw)
     rec.used_at = datetime.utcnow()
     db.session.commit()
 
-    flash("Password updated. You can now sign in.", "success")
+    flash_once("Password updated. You can now sign in.", "success")
     return redirect(url_for("auth.login_get"))
 
 
