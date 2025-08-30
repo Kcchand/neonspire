@@ -4,7 +4,7 @@ from collections import defaultdict
 
 from flask import Blueprint, render_template, render_template_string, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
-from sqlalchemy import text, or_, func
+from sqlalchemy import text, or_, func, and_
 
 from models import (
     db,
@@ -17,6 +17,7 @@ from models import (
     WithdrawRequest,
     ReferralCode,
     notify,
+    PaymentSettings,   # <-- added for bonus %
 )
 
 employee_bp = Blueprint("employeebp", __name__, url_prefix="/employee")
@@ -41,6 +42,18 @@ def _template_exists(name: str) -> bool:
         return True
     except Exception:
         return False
+
+
+# small helper to read first existing attribute name on a row
+def _first_attr(obj, *names, default=""):
+    if not obj:
+        return default
+    for n in names:
+        if hasattr(obj, n):
+            v = getattr(obj, n)
+            if v not in (None, ""):
+                return v
+    return default
 
 
 # ---------- tiny kv fallback (shared with admin) ----------
@@ -181,6 +194,56 @@ def employee_home():
 @employee_bp.get("/deposits")
 @login_required
 def deposits_list():
+    """
+    - If a valid status is chosen (PENDING/RECEIVED/LOADED/REJECTED) or `q` is provided,
+      return a unified filtered list as `items` (template uses the 'items' branch).
+    - Otherwise, return the legacy split view: `pending` + `recent`, plus enriched rows for
+      inline account details (pending_rows/recent_rows).
+    """
+    ALLOWED = {"PENDING", "RECEIVED", "LOADED", "REJECTED"}
+    status = (request.args.get("status") or "").upper().strip()
+    q = (request.args.get("q") or "").strip()
+
+    settings = db.session.get(PaymentSettings, 1)
+
+    # ---- Filtered path (unified list) ----
+    if status in ALLOWED or q:
+        base = DepositRequest.query
+
+        if status in ALLOWED:
+            base = base.filter(DepositRequest.status == status)
+
+        if q:
+            # Search: user name/email or deposit id
+            base = (
+                base.outerjoin(User, User.id == DepositRequest.user_id)
+                    .filter(
+                        or_(
+                            func.lower(func.coalesce(User.name, "")).like(f"%{q.lower()}%"),
+                            func.lower(func.coalesce(User.email, "")).like(f"%{q.lower()}%"),
+                            func.cast(DepositRequest.id, db.String).ilike(f"%{q}%"),
+                        )
+                    )
+            )
+
+        items = base.order_by(DepositRequest.created_at.desc()).all()
+
+        user_ids = [d.user_id for d in items if d.user_id]
+        users_map = {u.id: u for u in User.query.filter(User.id.in_(user_ids)).all()} if user_ids else {}
+        refcodes = _refcodes_for_user_ids(user_ids)
+
+        return render_template(
+            "employee_deposits.html",
+            page_title="Deposits",
+            items=items,               # <- template will render the unified 'items' table
+            users=users_map,
+            refcodes=refcodes,
+            status=status,
+            q=q,
+            settings=settings,
+        )
+
+    # ---- Legacy split view (no filter/query) ----
     pending = (
         DepositRequest.query.filter_by(status="PENDING")
         .order_by(DepositRequest.created_at.desc())
@@ -193,17 +256,66 @@ def deposits_list():
         .all()
     )
 
+    # Users & refcodes
     user_ids = [d.user_id for d in (pending + recent) if d.user_id]
     users_map = {u.id: u for u in User.query.filter(User.id.in_(user_ids)).all()} if user_ids else {}
     refcodes = _refcodes_for_user_ids(user_ids)
 
+    # ---------- Enriched rows with Game + GameAccount (login details) ----------
+    def build_rows(deps):
+        if not deps:
+            return []
+
+        u_ids = list({d.user_id for d in deps if d.user_id})
+        g_ids = list({d.game_id for d in deps if d.game_id})
+
+        users = {u.id: u for u in User.query.filter(User.id.in_(u_ids)).all()} if u_ids else {}
+        games = {g.id: g for g in Game.query.filter(Game.id.in_(g_ids)).all()} if g_ids else {}
+
+        # pull all accounts for (user_id, game_id) pairs
+        accounts = {}
+        if u_ids and g_ids:
+            rows = (
+                GameAccount.query
+                .filter(GameAccount.user_id.in_(u_ids))
+                .filter(GameAccount.game_id.in_(g_ids))
+                .all()
+            )
+            for a in rows:
+                accounts[(a.user_id, a.game_id)] = a
+
+        out = []
+        for d in deps:
+            u = users.get(d.user_id)
+            g = games.get(d.game_id) if d.game_id else None
+            acc = accounts.get((d.user_id, d.game_id)) if d.user_id and d.game_id else None
+            out.append({
+                "dep": d,
+                "user_name": _display_name(u) if u else f"User #{d.user_id}" if d.user_id else "—",
+                "game_name": g.name if g else ("—" if d.game_id is None else f"#{d.game_id}"),
+                "login_user": _first_attr(acc, "account_username", "username", "login", "user", default=""),
+                "login_pass": _first_attr(acc, "account_password", "password", "passcode", "pin", default=""),
+                "login_note": _first_attr(acc, "extra", "note", "notes", "remark", default=""),
+            })
+        return out
+
+    pending_rows = build_rows(pending)
+    recent_rows  = build_rows(recent)
+
     return render_template(
         "employee_deposits.html",
         page_title="Deposits",
+        # original context (kept)
         pending=pending,
         recent=recent,
         users=users_map,
         refcodes=refcodes,
+        status="",
+        q="",
+        settings=settings,
+        # new enriched rows (for showing login details nicely, if your template uses them)
+        pending_rows=pending_rows,
+        recent_rows=recent_rows,
     )
 
 

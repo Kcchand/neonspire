@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 
 {% block hero %}
+{% if not request.args.get('noinfo') %}
 <div class="ticker">
   <div class="shell ticker__track">
     <span>🔑 Your game credentials will appear here automatically once ready.</span>
   </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block content %}

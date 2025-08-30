@@ -3,7 +3,7 @@
 {% block hero %}
 <div class="ticker">
   <div class="shell ticker__track">
-    <span>💸 Manual cash‑out: enter totals below</span>
+    <span>💸 Manual cash-out: enter totals below</span>
     {% if settings %}
       <span>🧮 Limits: min {{ settings.min_redeem or 0 }} • max {{ settings.max_redeem or 0 }}</span>
     {% endif %}
@@ -42,7 +42,9 @@
                 style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
           <option value="">— No specific game —</option>
           {% for g in games %}
-            <option value="{{ g.id }}">{{ g.name }}</option>
+            <option value="{{ g.id }}" {% if preselect_game_id and preselect_game_id == g.id %}selected{% endif %}>
+              {{ g.name }}
+            </option>
           {% endfor %}
         </select>
       </div>
@@ -88,7 +90,7 @@
       <input type="hidden" id="amountHidden" name="amount" value="">
 
       <div class="form-actions" style="grid-column:1/-1;display:flex;gap:10px;justify-content:flex-end">
-        <a class="btn btn-ghost" href="{{ url_for('index') }}">Back</a>
+        <a class="btn btn-ghost" href="{{ url_for('short_bp.lob_short') }}">Back</a>
         <button class="btn btn-primary" type="submit">Submit Withdrawal</button>
       </div>
     </form>
@@ -97,12 +99,19 @@
 
 <script>
   (function () {
-    // Preselect a game if ?game_id=... was provided
-    const url = new URL(window.location.href);
-    const id = url.searchParams.get('game_id');
-    if (id) {
+    // Prefer server-side preselect if provided via /withdraw/<game_id>
+    const pre = {{ preselect_game_id if preselect_game_id is not none else 'null' }};
+    if (pre !== null) {
       const sel = document.getElementById('wdGame');
-      if (sel) sel.value = id;
+      if (sel) sel.value = String(pre);
+    } else {
+      // Fallback: support old ?game_id=... URLs
+      const url = new URL(window.location.href);
+      const id = url.searchParams.get('game_id');
+      if (id) {
+        const sel = document.getElementById('wdGame');
+        if (sel) sel.value = id;
+      }
     }
 
     const total   = document.getElementById('totalAmount');

@@ -45,10 +45,15 @@
         {% if current_user.is_authenticated %}
           {% if current_user.role == 'ADMIN' %}
             <a class="pill" href="{{ url_for('adminbp.admin_home') }}">Admin</a>
+            <!-- NEW: direct link to the Players admin page (for delete etc.) -->
+            <a class="pill" href="{{ url_for('adminbp.admin_players') }}">Players</a>
+            <a class="pill" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
+            <a class="pill" href="{{ url_for('adminbp.admin_users') }}">Employees</a>
           {% elif current_user.role == 'EMPLOYEE' %}
             <a class="pill" href="{{ url_for('employeebp.employee_home') }}">Employee</a>
           {% else %}
-            <a class="pill" href="{{ url_for('short_bp.log_short') }}">My Logins</a>
+            <!-- Updated: point directly to /mylogin -->
+            <a class="pill" href="{{ url_for('short_bp.mylogin_clean') }}">My Logins</a>
           {% endif %}
 
           <a class="pill" href="{{ url_for('notifybp.list_notifications') }}">🔔 {{ unread_count or 0 }}</a>

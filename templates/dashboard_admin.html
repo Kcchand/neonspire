@@ -10,6 +10,8 @@
       <a class="btn chip-btn" href="{{ url_for('adminbp.settings_get') }}">Settings</a>
       <a class="btn chip-btn" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
       <a class="btn chip-btn" href="{{ url_for('adminbp.admin_users') }}">Employees</a>
+      <!-- NEW: Players page (manage/delete players) -->
+      <a class="btn chip-btn" href="{{ url_for('adminbp.admin_players') }}">Players</a>
       <a class="btn chip-btn" href="{{ url_for('auth.login_get') }}?next={{ url_for('employeebp.employee_home') }}">Staff Login Link</a>
     </div>
   </div>

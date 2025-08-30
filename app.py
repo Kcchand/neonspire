@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, redirect, url_for  # redirect, url_for needed for short aliases
+from flask import Flask, render_template, redirect, url_for
 from dotenv import load_dotenv
 from flask_login import LoginManager, current_user
 from sqlalchemy import text, inspect as sqla_inspect
@@ -23,7 +23,7 @@ from models import (
     ChatMessage,
     DMThread,
     DMMessage,
-    ReferralCode,  # ensures referral_codes table is created
+    ReferralCode,
 )
 
 # blueprints
@@ -32,7 +32,7 @@ from dashboard import dash_bp
 from admin_bp import admin_bp
 from employee_bp import employee_bp
 from notifications import notify_bp
-from player_bp import player_bp, short_bp  # <-- import short_bp too!
+from player_bp import player_bp, short_bp  # keep import; short routes are defined here
 
 # (optional) live chat blueprint – only registers if present
 try:
@@ -169,36 +169,25 @@ def create_app():
     app.register_blueprint(employee_bp)
     app.register_blueprint(notify_bp)
     app.register_blueprint(player_bp)   # legacy /player/...
-    app.register_blueprint(short_bp)    # clean   /deposit/..., /withdraw/..., /logins
+    app.register_blueprint(short_bp)    # clean short routes (e.g., /dep, /withd, /lob, etc.)
     if chat_bp:
         app.register_blueprint(chat_bp)
 
-    # ------------------ SHORT, PROFESSIONAL ALIASES ------------------
-    # Safe (idempotent) registration to avoid "overwriting endpoint" errors on reloads
+    # ------------------ Simple extra aliases NOT in short_bp ------------------
+    # (Avoid duplicates of routes that short_bp already provides.)
     def _add_alias(rule: str, endpoint: str, view_func):
         if endpoint in app.view_functions:
             return
         app.add_url_rule(rule, endpoint=endpoint, view_func=view_func, methods=["GET"])
 
-    _add_alias("/lob",  "short_bp.lob_short",   lambda: redirect(url_for("index")))
-    _add_alias("/log",  "short_bp.log_short",   lambda: redirect(url_for("playerbp.accounts_page")))
-    _add_alias("/reg",  "short_bp.reg_short",   lambda: redirect(url_for("auth.register_get")))
-    _add_alias("/dep",  "short_bp.dep_short",   lambda: redirect(url_for("playerbp.deposit_step1")))
-    _add_alias(
-        "/dep/<string:method>",
-        "short_bp.dep_short_method",
-        lambda method: redirect(url_for("playerbp.deposit_step1", method=method.upper())),
-    )
-    _add_alias("/withd", "short_bp.withd_short", lambda: redirect(url_for("playerbp.withdraw_get")))
-
-    # ------------------ health ------------------
-    @app.get("/health")
-    def health():
-        return {"ok": True, "service": "web", "env": os.getenv("NODE_ENV", "production")}
+    # Helpful vanity paths:
+    _add_alias("/in",        "short_bp.login_short",    lambda: redirect(url_for("auth.login_get")))
+    _add_alias("/login",     "short_bp.login_full",     lambda: redirect(url_for("auth.login_get")))
+    _add_alias("/register",  "short_bp.register_full",  lambda: redirect(url_for("auth.register_get")))
+    _add_alias("/log", "short_bp.log_short", lambda: redirect(url_for("playerbp.mylogin")))
 
     # ------------------ Home / Lobby ------------------
     @app.route("/")
-    @app.route("/lobby")
     def index():
         games = Game.query.filter_by(is_active=True).order_by(
             Game.created_at.desc() if hasattr(Game, "created_at") else Game.id.desc()
@@ -281,6 +270,16 @@ def create_app():
             page_title="NeonSpire Casino",
         )
 
+    # Keep /lobby as a pure alias that lands on "/"
+    @app.get("/lobby")
+    def _lobby_alias():
+        return redirect("/")
+
+    # ------------------ health ------------------
+    @app.get("/health")
+    def health():
+        return {"ok": True, "service": "web", "env": os.getenv("NODE_ENV", "production")}
+
     # ------------------ Socket.IO sample ------------------
     @socketio.on("connect")
     def _on_connect():
@@ -321,7 +320,7 @@ def create_app():
                 "ALTER TABLE games ADD COLUMN backend_url VARCHAR(500) NULL",
             )
 
-        # --- users table new fields (mobile, email_verified, email_verified_at, promo_seen) ---
+        # --- users table new fields ---
         if not _has_col("users", "mobile"):
             _add_col("ALTER TABLE users ADD COLUMN mobile VARCHAR(24)")
         if not _has_col("users", "email_verified"):
@@ -331,7 +330,17 @@ def create_app():
         if not _has_col("users", "promo_seen"):
             _add_col("ALTER TABLE users ADD COLUMN promo_seen BOOLEAN DEFAULT 0")
 
-        # --- who issued player logins / who approved requests (for admin dashboards) ---
+        # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        # ADDITION: allow disabling accounts (used by admin to disable employee)
+        if not _has_col("users", "is_active"):
+            _add_col(
+                "ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT 1",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE users ADD COLUMN is_active TINYINT(1) DEFAULT 1",
+            )
+        # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+        # --- game_accounts patches ---
         if not _has_col("game_accounts", "issued_by_id"):
             _add_col(
                 "ALTER TABLE game_accounts ADD COLUMN issued_by_id INTEGER",
@@ -351,6 +360,7 @@ def create_app():
                 "ALTER TABLE game_accounts ADD COLUMN request_id INT NULL",
             )
 
+        # --- game_account_requests patches ---
         if not _has_col("game_account_requests", "approved_by_id"):
             _add_col(
                 "ALTER TABLE game_account_requests ADD COLUMN approved_by_id INTEGER",
@@ -370,7 +380,7 @@ def create_app():
                 "ALTER TABLE game_account_requests ADD COLUMN approved_at DATETIME NULL",
             )
 
-        # Optional: who loaded a deposit (useful in admin reports)
+        # --- deposit_requests patch ---
         if not _has_col("deposit_requests", "loaded_by"):
             _add_col(
                 "ALTER TABLE deposit_requests ADD COLUMN loaded_by INTEGER",

@@ -1,7 +1,10 @@
 from datetime import datetime
 import re
 import random
-from flask import Blueprint, render_template, render_template_string, request, redirect, url_for, flash, abort
+import os
+import time
+from werkzeug.utils import secure_filename
+from flask import Blueprint, render_template, render_template_string, request, redirect, url_for, flash, abort, current_app
 from flask_login import login_required, current_user
 from sqlalchemy import text
 
@@ -23,11 +26,7 @@ from models import (
 # ---------------------------------------------
 # Blueprints
 # ---------------------------------------------
-# Existing player blueprint (kept so nothing breaks)
 player_bp = Blueprint("playerbp", __name__, url_prefix="/player")
-
-# NEW: Clean, no-prefix blueprint for short professional URLs
-# Register this in app.py:  app.register_blueprint(short_bp)
 short_bp = Blueprint("short_bp", __name__, url_prefix="")
 
 # ---------- tiny kv fallback (no migration needed) ----------
@@ -76,6 +75,30 @@ def _kv_first(*keys, default: str | None = None) -> str | None:
             return v
     return default
 
+# ---------- uploads (player-side) ----------
+def _uploads_dir() -> str:
+    updir = os.path.join(current_app.static_folder, "uploads")
+    os.makedirs(updir, exist_ok=True)
+    return updir
+
+def _save_image(file_storage, prefix: str) -> str | None:
+    """
+    Save an uploaded image into static/uploads and return a static URL path.
+    Returns None if no file selected or invalid.
+    """
+    if not file_storage or not getattr(file_storage, "filename", ""):
+        return None
+    filename = secure_filename(file_storage.filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        flash("Only PNG/JPG/WEBP images are allowed for proof.", "error")
+        return None
+    ts = int(time.time())
+    new_name = f"{prefix}_{current_user.id}_{ts}{ext}"
+    dest = os.path.join(_uploads_dir(), new_name)
+    file_storage.save(dest)
+    return url_for("static", filename=f"uploads/{new_name}")
+
 # ---------- helpers ----------
 def _ensure_wallet(user_id: int) -> PlayerBalance:
     wallet = PlayerBalance.query.filter_by(user_id=user_id).first()
@@ -105,12 +128,40 @@ def _first_attr(obj, *names, default=None):
     return default
 
 def _template_exists(name: str) -> bool:
-    """Gracefully fall back if a template file hasn't been created yet."""
     try:
         render_template(name)  # will raise if missing
         return True
     except Exception:
         return False
+
+# ---- NEW: account helpers for employee context / auto-requests ----
+def _acc_username(acc: GameAccount | None) -> str:
+    if not acc:
+        return ""
+    return (_first_attr(acc, "account_username", "username", "login", "user", default="") or "")
+
+def _ensure_login_request_if_missing(user_id: int, game_id: int) -> tuple[bool, str]:
+    if not game_id:
+        return (False, "")
+    existing = GameAccount.query.filter_by(user_id=user_id, game_id=game_id).first()
+    if existing:
+        return (True, f"login={_acc_username(existing) or '—'}")
+    open_req = (
+        GameAccountRequest.query.filter_by(user_id=user_id, game_id=game_id)
+        .filter(GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"]))
+        .first()
+    )
+    if open_req:
+        return (False, "no login yet (request already open)")
+    new_req = GameAccountRequest(
+        user_id=user_id,
+        game_id=game_id,
+        status="PENDING",
+        created_at=datetime.utcnow(),
+    )
+    db.session.add(new_req)
+    db.session.commit()
+    return (False, "no login yet (auto-opened request)")
 
 # alias sets (match admin)
 PROMO1_ALIASES = ("promo_line1", "news_line1", "ticker_line1", "headline1", "news1")
@@ -227,7 +278,7 @@ def player_dashboard():
                 trending_games.append(by_id[gid])
 
     return render_template(
-        "dashboard_player.html",  # <- your template
+        "dashboard_player.html",
         page_title="Player Dashboard • NeonSpire Casino",
         wallet=wallet,
         games=games,
@@ -251,6 +302,14 @@ def request_game_account(game_id: int):
         flash("Game not available.", "error")
         return redirect(url_for("index"))  # redirect to lobby
 
+    # Block duplicates if player already HAS a GameAccount for this game
+    existing_acc = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
+    if existing_acc:
+        flash("⚠️ You already have this account. Please check your My Logins.", "error")
+        notify(current_user.id, "⚠️ You already have this game account. Check My Logins.")
+        return redirect(url_for("playerbp.mylogin", noinfo=1))  # suppress banner
+
+    # Existing open request?
     exists = (
         GameAccountRequest.query.filter_by(user_id=current_user.id, game_id=game_id)
         .filter(GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"]))
@@ -258,7 +317,7 @@ def request_game_account(game_id: int):
     )
     if exists:
         flash("You already have an open request for this game.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("playerbp.mylogin", noinfo=1))
 
     req = GameAccountRequest(
         user_id=current_user.id,
@@ -274,7 +333,7 @@ def request_game_account(game_id: int):
         pname = current_user.name or current_user.email or f"Player #{current_user.id}"
         notify(staff.id, f"New game access request: {game.name} by {pname}")
 
-    flash("Request submitted. You’ll receive credentials shortly.", "success")
+    flash("✅ Request submitted. You’ll receive credentials soon.", "success")
     return redirect(url_for("index"))
 
 # =============  LEGACY DEPOSIT — 2 steps (kept)  =============
@@ -282,7 +341,9 @@ def request_game_account(game_id: int):
 @login_required
 def deposit_step1():
     pre_id = request.args.get("game_id", type=int)
-    return _render_deposit_step1(pre_id)
+    if pre_id:
+        return redirect(url_for("short_bp.deposit_step1_clean", game_id=pre_id))
+    return _render_deposit_step1(preselect_game_id=pre_id)
 
 @player_bp.post("/deposit/step1")
 @login_required
@@ -307,7 +368,6 @@ def deposit_step1_post():
         if not g or not g.is_active:
             flash("Selected game is not available.", "error")
             return redirect(url_for("playerbp.deposit_step1"))
-    # redirect to CLEAN step2 path:
     return redirect(url_for("short_bp.deposit_step2_clean", game_id=game_id or 0, method=method, amount=amount))
 
 @player_bp.get("/deposit/step2")
@@ -330,8 +390,16 @@ def deposit_submit():
     method = (request.form.get("method") or "CRYPTO").upper()
     game_id_val = request.form.get("game_id")
     game_id = int(game_id_val) if game_id_val and game_id_val.isdigit() else None
-    proof_url = (request.form.get("proof_url") or "").strip()
+
+    # NEW: uploaded screenshot support
+    proof_file = request.files.get("proof_file")
+    uploaded_url = _save_image(proof_file, "deposit_proof") if proof_file else None
+
+    # Backward-compatible fields
+    proof_url_text = (request.form.get("proof_url") or "").strip()
     screenshot_url = (request.form.get("screenshot_url") or "").strip()
+    proof_url = uploaded_url or proof_url_text or screenshot_url
+
     if amount <= 0 or method not in ("CRYPTO", "CHIME"):
         flash("Invalid deposit details.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
@@ -340,22 +408,42 @@ def deposit_submit():
         if not g or not g.is_active:
             flash("Selected game is not available.", "error")
             return redirect(url_for("playerbp.deposit_step1"))
+
+    # Save request
     dep = DepositRequest(
         user_id=current_user.id,
         game_id=game_id,
         amount=amount,
         method=method,
-        proof_url=proof_url or screenshot_url,
+        proof_url=proof_url or "",
         status="PENDING",
         created_at=datetime.utcnow(),
     )
     db.session.add(dep)
     db.session.commit()
-    target = f" for game #{game_id}" if game_id else ""
-    extra = f" | proof: {proof_url or screenshot_url}" if (proof_url or screenshot_url) else ""
+
+    # Employee context + ensure login request if missing
+    game_name = ""
+    acc_note = ""
+    if game_id:
+        game = db.session.get(Game, game_id)
+        game_name = f"{game.name} (#{game_id})" if game else f"Game #{game_id}"
+
+        has_login, acc_note = _ensure_login_request_if_missing(current_user.id, game_id)
+        if has_login and not acc_note:
+            acc = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
+            acc_note = f"login={_acc_username(acc) or '—'}"
+
+    # Staff notifications
+    pname = current_user.name or current_user.email or f"Player #{current_user.id}"
+    extra = f" | proof: {proof_url}" if proof_url else ""
+    target = f" for {game_name}" if game_name else ""
+    suffix = f" | {acc_note}" if acc_note else ""
+    staff_msg = f"Deposit request #{dep.id}{target} — {pname}: {amount} via {method}{extra}{suffix}"
+
     for staff in User.query.filter(User.role.in_(("EMPLOYEE", "ADMIN"))).all():
-        pname = current_user.name or current_user.email or f"Player #{current_user.id}"
-        notify(staff.id, f"Deposit request #{dep.id}{target} — {pname}: {amount} via {method}{extra}")
+        notify(staff.id, staff_msg)
+
     notify(current_user.id, f"Deposit request #{dep.id} submitted. Your credits will appear shortly.")
     flash("Deposit submitted. We’ll notify you once it’s loaded.", "success")
     return redirect(url_for("playerbp.player_dashboard"))
@@ -364,6 +452,9 @@ def deposit_submit():
 @player_bp.get("/withdraw")
 @login_required
 def withdraw_get():
+    gid = request.args.get("game_id", type=int)
+    if gid:
+        return redirect(url_for("short_bp.withdraw_clean", game_id=gid))
     return _render_withdraw(game_id=None)
 
 @player_bp.post("/withdraw")
@@ -395,6 +486,7 @@ def withdraw_post():
     if method not in ("CRYPTO", "CHIME"):
         method = "MANUAL"
     address = (request.form.get("address") or "").strip()
+
     wr = WithdrawRequest(
         user_id=current_user.id,
         game_id=game_id,
@@ -405,6 +497,19 @@ def withdraw_post():
     )
     db.session.add(wr)
     db.session.commit()
+
+    # Employee context + ensure login request if missing
+    game_name = ""
+    acc_note = ""
+    if game_id:
+        game = db.session.get(Game, game_id)
+        game_name = f"{game.name} (#{game_id})" if game else f"Game #{game_id}"
+        has_login, acc_note = _ensure_login_request_if_missing(current_user.id, game_id)
+        if has_login and not acc_note:
+            acc = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
+            acc_note = f"login={_acc_username(acc) or '—'}"
+
+    # Staff message
     pname = current_user.name or current_user.email or f"Player #{current_user.id}"
     parts = [
         f"Withdraw request #{wr.id} from {pname}",
@@ -412,15 +517,19 @@ def withdraw_post():
         f"keep={keep_amount}",
         f"tip={tip_amount}",
         f"cashout={amount}",
-        f"via {method}"
+        f"via {method}",
     ]
-    if game_id:
-        parts.append(f"(game #{game_id})")
+    if game_name:
+        parts.append(f"game={game_name}")
     if address:
         parts.append(f"dest: {address}")
+    if acc_note:
+        parts.append(acc_note)
     staff_msg = " | ".join(parts)
+
     for staff in User.query.filter(User.role.in_(("EMPLOYEE", "ADMIN"))).all():
         notify(staff.id, staff_msg)
+
     notify(current_user.id, f"Withdrawal request #{wr.id} submitted. You’ll be notified once processed.")
     flash("Withdrawal request submitted. You’ll be notified once processed.", "success")
     return redirect(url_for("playerbp.withdraw_get"))
@@ -438,7 +547,7 @@ def note_mark_read(nid: int):
     return redirect(url_for("playerbp.player_dashboard"))
 
 # =============  MY LOGINS (accounts + requests)  =============
-@player_bp.get("/logins", endpoint="accounts_page")
+@player_bp.get("/mylogin", endpoint="mylogin")   # primary path
 @login_required
 def accounts_page():
     if not _player_like():
@@ -474,8 +583,13 @@ def accounts_page():
         })
     return render_template("player_accounts.html", accounts=accounts, requests=reqs, page_title="My Logins • NeonSpire Casino")
 
-# ---------- Endpoint aliases (keep old links working) ----------
-player_bp.add_url_rule("/my-logins", endpoint="logins", view_func=accounts_page)
+# ---------- Legacy path ----------
+@player_bp.get("/logins")
+@login_required
+def legacy_logins_redirect():
+    return redirect(url_for("playerbp.mylogin"))
+
+# ---------- Other endpoint aliases you already had ----------
 player_bp.add_url_rule("/deposit", endpoint="deposit_get", view_func=deposit_step1)
 
 # =================================================================
@@ -483,17 +597,14 @@ player_bp.add_url_rule("/deposit", endpoint="deposit_get", view_func=deposit_ste
 # =================================================================
 
 def _generate_ref_code_for(user: User) -> str:
-    """Two letters from name (A-Z) + 4 digits => 6 chars total, unique."""
     base = "".join(re.findall(r"[A-Za-z]", (user.name or "").strip()))[:2].upper()
     if len(base) < 2:
         base = (base + "XX")[:2]
-    # loop until a unique code is found
     for _ in range(50):
         num = random.randint(0, 9999)
         code = f"{base}{num:04d}"
         if not ReferralCode.query.filter_by(code=code).first():
             return code
-    # extreme fallback with random prefix
     return f"RX{random.randint(0, 9999):04d}"
 
 def _ensure_referral_for(user_id: int) -> ReferralCode:
@@ -510,11 +621,9 @@ def _ensure_referral_for(user_id: int) -> ReferralCode:
 @player_bp.get("/referral")
 @login_required
 def referral_home():
-    """Player-facing page that shows their code and a shareable link."""
     if not _player_like():
         return abort(403)
     rc = _ensure_referral_for(current_user.id)
-    # share link points to a public landing under this blueprint
     share_url = url_for("playerbp.referral_landing", code=rc.code, _external=True)
 
     if _template_exists("player_referral.html"):
@@ -522,7 +631,6 @@ def referral_home():
                                page_title="Referral • NeonSpire Casino",
                                code=rc.code,
                                link=share_url)
-    # Inline fallback
     return render_template_string("""
     {% extends "base.html" %}
     {% block content %}
@@ -542,11 +650,9 @@ def referral_home():
     {% endblock %}
     """, code=rc.code, link=share_url)
 
-# ---- NEW: JSON endpoint used by the lobby popup "Get My Link" ----
 @player_bp.get("/referral/my-link.json", endpoint="referral_my_link_json")
 @login_required
 def referral_my_link_json():
-    """Return the player's referral code and full link as JSON."""
     if not _player_like():
         return abort(403)
     rc = _ensure_referral_for(current_user.id)
@@ -556,7 +662,6 @@ def referral_my_link_json():
 @player_bp.post("/referral/new")
 @login_required
 def referral_new_code():
-    """Optional: allow a player to rotate their code (keeps unique)."""
     if not _player_like():
         return abort(403)
     rc = ReferralCode.query.filter_by(user_id=current_user.id).first()
@@ -565,7 +670,6 @@ def referral_new_code():
         flash("Referral code created.", "success")
         return redirect(url_for("playerbp.referral_home"))
 
-    # generate a new unique code and save
     rc.code = _generate_ref_code_for(current_user)
     rc.created_at = datetime.utcnow()
     db.session.commit()
@@ -574,15 +678,11 @@ def referral_new_code():
 
 @player_bp.get("/ref/<string:code>")
 def referral_landing(code: str):
-    """
-    Public landing for a referral link (kept under /player).
-    """
     code = (code or "").strip().upper()
     rc = ReferralCode.query.filter_by(code=code).first()
     if not rc:
         flash("Referral code not found.", "error")
         return redirect(url_for("auth.register_get"))
-    # (Optional) track usage
     if hasattr(rc, "uses"):
         rc.uses = (rc.uses or 0) + 1
         db.session.commit()
@@ -592,7 +692,6 @@ def referral_landing(code: str):
 # CLEAN, SHORT ROUTES (no /player prefix) via short_bp
 # -----------------------------------------------------------
 
-# Your existing clean routes (kept)
 @short_bp.get("/deposit/<int:game_id>", endpoint="deposit_step1_clean")
 @login_required
 def deposit_step1_clean(game_id: int):
@@ -619,24 +718,19 @@ def withdraw_clean(game_id: int):
 @short_bp.get("/logins", endpoint="logins_clean")
 @login_required
 def logins_clean():
-    return accounts_page()
+    return redirect(url_for("playerbp.mylogin"))
 
-# -------- EXTRA short aliases you requested (do not break anything) --------
-# 1) /dep  (Deposit Step 1 - no preselect)
+# -------- extra short aliases (kept) --------
 @short_bp.get("/dep")
 @login_required
 def dep_root():
     return redirect(url_for("playerbp.deposit_step1"))
 
-# 1b) /dep/<game_id> (Deposit Step 1 with preselect)
 @short_bp.get("/dep/<int:game_id>")
 @login_required
 def dep_with_game(game_id: int):
-    # just reuse clean deposit step1
     return redirect(url_for("short_bp.deposit_step1_clean", game_id=game_id))
 
-# 2) /dep/<method>?amount=&game_id=   (Deposit Step 2 short)
-#    Example: /dep/CRYP?amount=10&game_id=12
 @short_bp.get("/dep/<string:method>")
 @login_required
 def dep_method_short(method: str):
@@ -653,7 +747,6 @@ def dep_method_short(method: str):
     return redirect(url_for("short_bp.deposit_step2_clean",
                             game_id=game_id or 0, method=method.upper(), amount=amount))
 
-# 3) /withd  (Withdraw page — optional ?game_id=)
 @short_bp.get("/withd")
 @login_required
 def withd_short():
@@ -662,18 +755,21 @@ def withd_short():
         return redirect(url_for("short_bp.withdraw_clean", game_id=game_id))
     return _render_withdraw(game_id=None)
 
-# 4) /log   (My Logins)
 @short_bp.get("/log")
 @login_required
 def log_short():
-    return redirect(url_for("playerbp.accounts_page"))
+    return redirect(url_for("playerbp.mylogin"))
 
-# 5) /reg   (Register)
 @short_bp.get("/reg")
 def reg_short():
     return redirect(url_for("auth.register_get"))
 
-# 6) /lob   (Lobby)
 @short_bp.get("/lob")
 def lob_short():
     return redirect(url_for("index"))
+
+# --- NEW: /mylogin short path (top-level) ---
+@short_bp.get("/mylogin", endpoint="mylogin_clean")
+@login_required
+def mylogin_clean():
+    return accounts_page()

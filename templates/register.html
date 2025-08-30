@@ -30,12 +30,18 @@
 </style>
 
 <div class="auth-wrap">
-  <!-- Left: Register form (no local flash rendering; base.html shows messages once) -->
+  <!-- Left: Register form -->
   <div class="auth-card">
     <h1 class="auth-title">Create Account</h1>
     <p class="auth-sub">Join and start playing in minutes.</p>
 
     <form id="registerForm" method="post" action="{{ url_for('auth.register_post') }}" class="auth-form">
+      {# If the page is opened with ?ref=AB1234, pass it through to the server #}
+      {% set refcode = request.args.get('ref') %}
+      {% if refcode %}
+        <input type="hidden" name="ref" value="{{ refcode }}">
+      {% endif %}
+
       <div class="fg">
         <label for="name">Full Name</label>
         <input id="name" name="name" type="text" placeholder="Jane Player" required>

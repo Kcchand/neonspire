@@ -1,10 +1,29 @@
 {% extends "base.html" %}
 {% block content %}
+
+<style>
+  /* Subtle table polish + right-aligned actions */
+  .tbl { width:100%; border-collapse:separate; border-spacing:0; }
+  .tbl th, .tbl td { padding:10px 12px; vertical-align:middle; }
+  .tbl thead th { text-align:left; font-weight:700; opacity:.9; }
+  .tbl td.actions { text-align:right; white-space:nowrap; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  .muted-wrap { display:flex; flex-direction:column; gap:2px; }
+  .cred { display:flex; gap:8px; align-items:center; }
+  .cred .pill { padding:2px 8px; border-radius:8px; border:1px solid var(--stroke); font-size:12px; }
+  .icon-btn { border:1px solid var(--stroke); border-radius:8px; background:transparent; padding:6px 8px; cursor:pointer; }
+  .icon-btn[disabled] { opacity:.5; cursor:not-allowed; }
+  .between { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .inline-form { display:flex; align-items:center; gap:8px; }
+  .mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mt24{margin-top:24px}
+  .row.gap8 { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
+  .w-compact { width:1%; white-space:nowrap; }
+</style>
+
 <div class="card card-glass">
   <div class="between">
     <h1 class="h1">Deposits</h1>
 
-    {# Optional filter bar (safe even if status/q aren't provided) #}
     <form method="get" class="inline-form">
       <select name="status" class="input">
         {% for st in ['PENDING','RECEIVED','LOADED','REJECTED'] %}
@@ -16,10 +35,156 @@
     </form>
   </div>
 
-  {# Prefer a unified 'items' list if provided. Otherwise render Pending + Recent sections. #}
   {% set bonus = (settings.bonus_percent if settings else 0) %}
 
-  {% if items is defined %}
+  {# =================== NEW ENHANCED RENDER (uses pending_rows / recent_rows) =================== #}
+  {% if pending_rows is defined or recent_rows is defined %}
+    <h3 class="h3 mt16">Pending</h3>
+    <table class="tbl mt8">
+      <thead>
+        <tr>
+          <th class="w-compact">ID</th>
+          <th>User</th>
+          <th>Game</th>
+          <th>Login</th>
+          <th>Amount</th>
+          <th>Method</th>
+          <th>Created</th>
+          <th class="actions w-compact">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in pending_rows or [] %}
+          {% set d = r.dep %}
+          <tr>
+            <td class="mono">#{{ d.id }}</td>
+            <td>
+              <div class="muted-wrap">
+                <strong>{{ r.user_name }}</strong>
+                {% if refcodes and refcodes.get(d.user_id) %}
+                  <span class="muted">Ref: {{ refcodes.get(d.user_id) }}</span>
+                {% endif %}
+              </div>
+            </td>
+            <td>{{ r.game_name }}</td>
+            <td>
+              {% if r.login_user or r.login_pass or r.login_note %}
+                <div class="cred">
+                  {% if r.login_user %}
+                    <span class="pill mono" title="Username">{{ r.login_user }}</span>
+                    <button class="icon-btn" type="button" data-copy="{{ r.login_user }}" title="Copy username">📋</button>
+                  {% endif %}
+                </div>
+                <div class="cred" style="margin-top:4px">
+                  {% if r.login_pass %}
+                    <span class="pill mono" title="Password">{{ r.login_pass }}</span>
+                    <button class="icon-btn" type="button" data-copy="{{ r.login_pass }}" title="Copy password">📋</button>
+                  {% endif %}
+                </div>
+                {% if r.login_note %}
+                  <div class="muted mono" style="margin-top:4px">{{ r.login_note }}</div>
+                {% endif %}
+              {% else %}
+                <span class="muted">No credentials on file</span>
+              {% endif %}
+            </td>
+            <td>{{ d.amount }}</td>
+            <td>{{ d.method }}</td>
+            <td class="mono">{{ d.created_at.strftime('%Y-%m-%d %H:%M') if d.created_at }}</td>
+            <td class="actions">
+              <div class="row gap8">
+                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                  <button class="btn btn-primary">Approve & Load (+{{ bonus or 0 }}%)</button>
+                </form>
+                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                  <button class="btn btn-ghost">Reject</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="8" class="muted">No pending deposits.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3 class="h3 mt24">Recent</h3>
+    <table class="tbl mt8">
+      <thead>
+        <tr>
+          <th class="w-compact">ID</th>
+          <th>User</th>
+          <th>Game</th>
+          <th>Login</th>
+          <th>Amount</th>
+          <th>Method</th>
+          <th>Status</th>
+          <th>Updated</th>
+          <th class="actions w-compact">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recent_rows or [] %}
+          {% set d = r.dep %}
+          <tr>
+            <td class="mono">#{{ d.id }}</td>
+            <td>
+              <div class="muted-wrap">
+                <strong>{{ r.user_name }}</strong>
+                {% if refcodes and refcodes.get(d.user_id) %}
+                  <span class="muted">Ref: {{ refcodes.get(d.user_id) }}</span>
+                {% endif %}
+              </div>
+            </td>
+            <td>{{ r.game_name }}</td>
+            <td>
+              {% if r.login_user or r.login_pass or r.login_note %}
+                <div class="cred">
+                  {% if r.login_user %}
+                    <span class="pill mono" title="Username">{{ r.login_user }}</span>
+                    <button class="icon-btn" type="button" data-copy="{{ r.login_user }}" title="Copy username">📋</button>
+                  {% endif %}
+                </div>
+                <div class="cred" style="margin-top:4px">
+                  {% if r.login_pass %}
+                    <span class="pill mono" title="Password">{{ r.login_pass }}</span>
+                    <button class="icon-btn" type="button" data-copy="{{ r.login_pass }}" title="Copy password">📋</button>
+                  {% endif %}
+                </div>
+                {% if r.login_note %}
+                  <div class="muted mono" style="margin-top:4px">{{ r.login_note }}</div>
+                {% endif %}
+              {% else %}
+                <span class="muted">No credentials on file</span>
+              {% endif %}
+            </td>
+            <td>{{ d.amount }}</td>
+            <td>{{ d.method }}</td>
+            <td>{{ d.status }}</td>
+            <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') if (d.updated_at or d.created_at) }}</td>
+            <td class="actions">
+              <div class="row gap8">
+                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                  <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                    Approve & Load (+{{ bonus or 0 }}%)
+                  </button>
+                </form>
+                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                  <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="9" class="muted">No recent items.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+  {# =================== LEGACY RENDER (uses your original context) =================== #}
+  {% elif items is defined %}
     <table class="tbl mt12">
       <thead>
         <tr>
@@ -29,7 +194,7 @@
           <th>Method</th>
           <th>Status</th>
           <th>Updated</th>
-          <th>Action</th>
+          <th class="actions">Action</th>
         </tr>
       </thead>
       <tbody>
@@ -46,16 +211,18 @@
             <td>{{ d.method }}</td>
             <td>{{ d.status }}</td>
             <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
-            <td class="row gap8">
-              <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
-              <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
-                <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
-                  Approve & Load (+{{ bonus or 0 }}%)
-                </button>
-              </form>
-              <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
-                <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
-              </form>
+            <td class="actions">
+              <div class="row gap8">
+                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                  <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                    Approve & Load (+{{ bonus or 0 }}%)
+                  </button>
+                </form>
+                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                  <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
+                </form>
+              </div>
             </td>
           </tr>
         {% else %}
@@ -65,7 +232,6 @@
     </table>
 
   {% else %}
-    {# --------- Section: Pending --------- #}
     <h3 class="h3 mt16">Pending</h3>
     <table class="tbl mt8">
       <thead>
@@ -75,7 +241,7 @@
           <th>Amount</th>
           <th>Method</th>
           <th>Created</th>
-          <th>Action</th>
+          <th class="actions">Action</th>
         </tr>
       </thead>
       <tbody>
@@ -91,14 +257,16 @@
             <td>{{ d.amount }}</td>
             <td>{{ d.method }}</td>
             <td class="mono">{{ (d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
-            <td class="row gap8">
-              <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
-              <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
-                <button class="btn btn-primary">Approve & Load (+{{ bonus or 0 }}%)</button>
-              </form>
-              <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
-                <button class="btn btn-ghost">Reject</button>
-              </form>
+            <td class="actions">
+              <div class="row gap8">
+                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                  <button class="btn btn-primary">Approve & Load (+{{ bonus or 0 }}%)</button>
+                </form>
+                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                  <button class="btn btn-ghost">Reject</button>
+                </form>
+              </div>
             </td>
           </tr>
         {% else %}
@@ -107,7 +275,6 @@
       </tbody>
     </table>
 
-    {# --------- Section: Recent (non-pending) --------- #}
     <h3 class="h3 mt24">Recent</h3>
     <table class="tbl mt8">
       <thead>
@@ -118,7 +285,7 @@
           <th>Method</th>
           <th>Status</th>
           <th>Updated</th>
-          <th>Action</th>
+          <th class="actions">Action</th>
         </tr>
       </thead>
       <tbody>
@@ -135,16 +302,18 @@
             <td>{{ d.method }}</td>
             <td>{{ d.status }}</td>
             <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
-            <td class="row gap8">
-              <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
-              <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
-                <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
-                  Approve & Load (+{{ bonus or 0 }}%)
-                </button>
-              </form>
-              <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
-                <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
-              </form>
+            <td class="actions">
+              <div class="row gap8">
+                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                  <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                    Approve & Load (+{{ bonus or 0 }}%)
+                  </button>
+                </form>
+                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                  <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
+                </form>
+              </div>
             </td>
           </tr>
         {% else %}
@@ -154,4 +323,19 @@
     </table>
   {% endif %}
 </div>
+
+<script>
+  // Simple copy-to-clipboard for credential pills
+  document.addEventListener('click', function(e){
+    const btn = e.target.closest('[data-copy]');
+    if(!btn) return;
+    const txt = btn.getAttribute('data-copy') || '';
+    if(!txt) return;
+    navigator.clipboard.writeText(txt).then(()=>{
+      btn.textContent = '✅';
+      setTimeout(()=>btn.textContent='📋', 900);
+    }).catch(()=>{ /* ignore */ });
+  });
+</script>
+
 {% endblock %}

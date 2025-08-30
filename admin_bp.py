@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from flask import (
-    Blueprint, render_template, request, redirect,
+    Blueprint, render_template, render_template_string, request, redirect,
     url_for, flash, abort, current_app
 )
 from flask_login import login_required, current_user
@@ -20,6 +20,9 @@ from models import (
     PlayerBalance,      # optional wallet credit on deposit load
     GameAccount,        # for IDs / reporting
     GameAccountRequest, # schema may exist with different statuses
+    WithdrawRequest,
+    ReferralCode,
+    Notification,
     notify,
 )
 
@@ -163,6 +166,9 @@ def _when_from_account(acc: GameAccount):
                 return val
     return None
 
+def _name(u: User | None) -> str:
+    return (u.name or u.email or (f"User #{u.id}" if u and u.id else "—")).strip() if u else "—"
+
 # -------------------- Admin Home --------------------
 
 @admin_bp.get("/")
@@ -263,9 +269,6 @@ def admin_home():
         .limit(15)
         .all()
     )
-
-    def _name(u: User | None) -> str:
-        return (u.name or u.email or f"User #{u.id}").strip() if u else "—"
 
     for acc, gname in rows:
         # player
@@ -480,7 +483,10 @@ def admin_users():
             return redirect(url_for("adminbp.admin_users"))
 
         u = User(name=name, email=email, role="EMPLOYEE")
-        u.set_password(password)
+        if hasattr(u, "set_password"):
+            u.set_password(password)
+        else:
+            setattr(u, "password", password)
         db.session.add(u)
         db.session.commit()
 
@@ -491,6 +497,65 @@ def admin_users():
         User.created_at.desc() if hasattr(User, "created_at") else User.id.desc()
     ).all()
     return render_template("admin_users.html", employees=employees, page_title="Employees")
+
+# === Employee account actions ===
+
+@admin_bp.post("/users/<int:user_id>/disable")
+@login_required
+def admin_disable_employee(user_id: int):
+    u = db.session.get(User, user_id)
+    if not u or (u.role or "").upper() == "ADMIN":
+        flash("Invalid employee.", "error")
+        return redirect(url_for("adminbp.admin_users"))
+
+    did = False
+    if hasattr(u, "is_active"):
+        u.is_active = False; did = True
+    if hasattr(u, "active"):
+        u.active = False; did = True
+    if not did:
+        u.role = "DISABLED"
+    db.session.commit()
+    flash(f"{_name(u)} has been disabled.", "success")
+    return redirect(url_for("adminbp.admin_users"))
+
+@admin_bp.post("/users/<int:user_id>/enable")
+@login_required
+def admin_enable_employee(user_id: int):
+    u = db.session.get(User, user_id)
+    if not u:
+        flash("User not found.", "error")
+        return redirect(url_for("adminbp.admin_users"))
+
+    did = False
+    if hasattr(u, "is_active"):
+        u.is_active = True; did = True
+    if hasattr(u, "active"):
+        u.active = True; did = True
+    if (u.role or "").upper() in ("DISABLED", "") and not did:
+        u.role = "EMPLOYEE"
+    db.session.commit()
+    flash(f"{_name(u)} has been enabled.", "success")
+    return redirect(url_for("adminbp.admin_users"))
+
+@admin_bp.post("/users/<int:user_id>/password")
+@login_required
+def admin_change_employee_password(user_id: int):
+    u = db.session.get(User, user_id)
+    if not u or (u.role or "").upper() == "ADMIN":
+        flash("Invalid employee.", "error")
+        return redirect(url_for("adminbp.admin_users"))
+    new_pw = (request.form.get("new_password") or "").strip()
+    if not new_pw:
+        flash("New password is required.", "error")
+        return redirect(url_for("adminbp.admin_users"))
+    if hasattr(u, "set_password"):
+        u.set_password(new_pw)
+    else:
+        setattr(u, "password", new_pw)
+    db.session.commit()
+    flash(f"Password updated for {_name(u)}.", "success")
+    return redirect(url_for("adminbp.admin_users"))
 
 # -------------------- Games Management (list/create/edit) -----------------
 
@@ -539,7 +604,6 @@ def create_game():
     db.session.add(g)
     db.session.commit()  # need g.id for kv mirror
 
-    # Mirror backend_url to kv so employees can use it even without a column
     _kv_set(f"game:{g.id}:backend_url", backend_url or "")
 
     flash("Game created.", "success")
@@ -561,7 +625,6 @@ def edit_game_post(game_id: int):
     if hasattr(g, "backend_url"):
         g.backend_url = backend_url
 
-    # icon (upload takes precedence)
     icon_file = request.files.get("icon_file")
     uploaded_icon = _save_image(icon_file, "game_icon")
     if uploaded_icon:
@@ -571,12 +634,10 @@ def edit_game_post(game_id: int):
         if url_from_text:
             g.icon_url = url_from_text
 
-    # toggle active (if checkbox provided)
     g.is_active = "is_active" in request.form
 
     db.session.commit()
 
-    # Mirror backend_url to kv so employees always have a link
     _kv_set(f"game:{g.id}:backend_url", backend_url or "")
 
     flash("Game updated.", "success")
@@ -616,7 +677,6 @@ def deposits_audit():
         .order_by(DepositRequest.created_at.desc())
         .all()
     )
-    # Provide recent completed for your template
     recent = (
         DepositRequest.query.filter(DepositRequest.status.in_(["LOADED", "PAID"]))
         .order_by(DepositRequest.updated_at.desc())
@@ -641,11 +701,9 @@ def deposit_mark(dep_id: int, action: str):
     if action == "loaded":
         dep.status = "LOADED"
         dep.loaded_at = datetime.utcnow()
-        # record who loaded (if your model has this column)
         if hasattr(dep, "loaded_by"):
             dep.loaded_by = current_user.id
 
-        # wallet credit (optional)
         if dep.amount and dep.user_id:
             wallet = PlayerBalance.query.filter_by(user_id=dep.user_id).first()
             if wallet:
@@ -664,3 +722,84 @@ def deposit_mark(dep_id: int, action: str):
         flash("Deposit marked as REJECTED.", "success")
 
     return redirect(url_for("adminbp.deposits_audit"))
+
+# -------------------- Players list + Delete player -------------------
+
+def _template_exists(name: str) -> bool:
+    try:
+        render_template(name)
+        return True
+    except Exception:
+        return False
+
+@admin_bp.get("/players", endpoint="admin_players")
+@login_required
+def admin_players():
+    players = (
+        User.query.filter_by(role="PLAYER")
+        .order_by(User.created_at.desc() if hasattr(User, "created_at") else User.id.desc())
+        .limit(200)
+        .all()
+    )
+    if _template_exists("admin_players.html"):
+        return render_template("admin_players.html", page_title="Players", players=players)
+    # Minimal fallback page if template is missing
+    return render_template_string("""
+    {% extends "base.html" %}
+    {% block content %}
+    <div class="shell">
+      <div class="panel between">
+        <div class="h3">Players</div>
+        <a class="btn" href="{{ url_for('adminbp.admin_home') }}">← Back</a>
+      </div>
+      <div class="panel">
+        <table class="tbl">
+          <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Joined</th><th>Action</th></tr></thead>
+          <tbody>
+            {% for p in players %}
+              <tr>
+                <td class="mono">#{{ p.id }}</td>
+                <td>{{ p.name or '—' }}</td>
+                <td>{{ p.email }}</td>
+                <td class="mono">{{ p.created_at or '—' }}</td>
+                <td>
+                  <form method="post" action="{{ url_for('adminbp.delete_player', player_id=p.id) }}" onsubmit="return confirm('Delete this player and all related data?');">
+                    <button class="btn btn-ghost" type="submit">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% else %}
+              <tr><td colspan="5" class="muted">No players found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endblock %}
+    """, players=players)
+
+@admin_bp.post("/players/<int:player_id>/delete")
+@login_required
+def delete_player(player_id: int):
+    """Hard delete a player and ALL their data (safe across schema variants)."""
+    u = db.session.get(User, player_id)
+    if not u or (u.role or "").upper() != "PLAYER":
+        flash("Player not found.", "error")
+        return redirect(url_for("adminbp.admin_players"))
+
+    try:
+        DepositRequest.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        WithdrawRequest.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        GameAccountRequest.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        GameAccount.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        PlayerBalance.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        ReferralCode.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        Notification.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+
+        db.session.delete(u)
+        db.session.commit()
+        flash("Player and all related data deleted.", "success")
+    except Exception:
+        db.session.rollback()
+        flash("Failed to delete player. See server logs.", "error")
+    return redirect(url_for("adminbp.admin_players"))

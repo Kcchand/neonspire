@@ -45,19 +45,24 @@
       {% endif %}
     </div>
 
-    <form class="form-grid" method="post" action="{{ url_for('playerbp.deposit_submit') }}" style="margin-top:14px">
+    <!-- File upload form -->
+    <form class="form-grid" method="post" action="{{ url_for('playerbp.deposit_submit') }}"
+          enctype="multipart/form-data" style="margin-top:14px">
       <input type="hidden" name="amount" value="{{ amount }}">
       <input type="hidden" name="method" value="{{ method }}">
       <input type="hidden" name="game_id" value="{{ game.id if game else '' }}">
 
+      <!-- New: direct image upload -->
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="proofFile">Upload Proof/Screenshot (PNG/JPG/WEBP)</label>
+        <input id="proofFile" name="proof_file" type="file" accept=".png,.jpg,.jpeg,.webp">
+        <div class="muted" style="margin-top:4px">Attach your payment screenshot (preferred).</div>
+      </div>
+
+      <!-- Optional proof URL kept -->
       <div class="form-group" style="grid-column:1/-1">
         <label for="proofUrl">Payment Proof (URL)</label>
         <input id="proofUrl" name="proof_url" type="url" placeholder="Paste a link to your payment proof (optional)">
-      </div>
-
-      <div class="form-group" style="grid-column:1/-1">
-        <label for="ssUrl">Screenshot URL (optional)</label>
-        <input id="ssUrl" name="screenshot_url" type="url" placeholder="Paste a link to your screenshot (optional)">
       </div>
 
       <div class="form-actions" style="grid-column:1/-1;display:flex;gap:10px;justify-content:flex-end">

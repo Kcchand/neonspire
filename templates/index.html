@@ -137,10 +137,10 @@ document.addEventListener("DOMContentLoaded", () => {
       <div class="rail-title">Contact Us</div>
 
       {# Use settings.* if provided, else fallback to the known URLs #}
-      {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/1234567890') %}
+      {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/+12342795662') %}
       {% set tg = (settings.telegram_url if settings and settings.telegram_url else 'https://t.me/Neonspire') %}
       {% set fb = (settings.facebook_url if settings and settings.facebook_url else 'https://www.facebook.com/neonspirecas') %}
-      {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/yourprofile') %}
+      {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/neonspirecasino') %}
 
       <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener noreferrer" data-external="1">WhatsApp</a>
