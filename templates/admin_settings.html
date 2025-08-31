@@ -28,6 +28,20 @@
           <textarea id="crypto_wallet_text" name="crypto_wallet_text" rows="2" class="input"
                     placeholder="USDT-TRC20: TX...">{{ settings.crypto_wallet_text if settings else '' }}</textarea>
 
+          <!-- NEW: Direct Pay Link (optional) -->
+          <div class="form-group" style="margin-top:10px">
+            <label class="muted" for="crypto_pay_url">Direct Pay Link (optional)</label>
+            <input id="crypto_pay_url"
+                   name="crypto_pay_url"
+                   type="url"
+                   class="input"
+                   value="{{ settings.crypto_pay_url or '' }}"
+                   placeholder="https://your-processor.example/pay?addr=...">
+            <div class="muted" style="font-size:12px;margin-top:6px">
+              If set, players will see a “Pay with Crypto” button that opens this link.
+            </div>
+          </div>
+
           <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
             <div>
               <label class="muted" for="crypto_qr">QR Image (optional)</label>
@@ -50,6 +64,20 @@
           <label class="muted" for="chime_handle">Chime Handle (shown to players)</label>
           <textarea id="chime_handle" name="chime_handle" rows="2" class="input"
                     placeholder="@your-chime">{{ settings.chime_handle if settings else '' }}</textarea>
+
+          <!-- NEW: Direct Pay Link (optional) -->
+          <div class="form-group" style="margin-top:10px">
+            <label class="muted" for="chime_pay_url">Direct Pay Link (optional)</label>
+            <input id="chime_pay_url"
+                   name="chime_pay_url"
+                   type="url"
+                   class="input"
+                   value="{{ settings.chime_pay_url or '' }}"
+                   placeholder="https://chime.me/pay/your-handle">
+            <div class="muted" style="font-size:12px;margin-top:6px">
+              If set, players will see a “Pay with Chime” button that opens this link.
+            </div>
+          </div>
 
           <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
             <div>

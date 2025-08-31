@@ -25,21 +25,47 @@
       {% if method == 'CRYPTO' %}
         <div class="method">
           <div class="method-title">Crypto</div>
+
           {% if settings and settings.crypto_wallet_text %}
-            <div class="muted">Wallet: {{ settings.crypto_wallet_text }}</div>
+            <div class="muted" style="margin-bottom:6px">Wallet:</div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <input id="copyField" class="input" style="flex:1; min-width:280px"
+                     value="{{ settings.crypto_wallet_text }}" readonly>
+              <button class="btn" type="button" onclick="copyPayField()">Copy</button>
+
+              {% if settings.crypto_pay_url %}
+                <a class="btn btn-primary" href="{{ settings.crypto_pay_url }}" target="_blank" rel="noopener">
+                  Pay now
+                </a>
+              {% endif %}
+            </div>
           {% endif %}
+
           {% if settings and settings.crypto_qr_url %}
-            <img class="qr" src="{{ settings.crypto_qr_url }}" alt="Crypto QR">
+            <img class="qr" src="{{ settings.crypto_qr_url }}" alt="Crypto QR" style="margin-top:10px">
           {% endif %}
         </div>
       {% else %}
         <div class="method">
           <div class="method-title">Chime</div>
+
           {% if settings and settings.chime_handle %}
-            <div class="muted">Handle: {{ settings.chime_handle }}</div>
+            <div class="muted" style="margin-bottom:6px">Handle:</div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <input id="copyField" class="input" style="flex:1; min-width:280px"
+                     value="{{ settings.chime_handle }}" readonly>
+              <button class="btn" type="button" onclick="copyPayField()">Copy</button>
+
+              {% if settings.chime_pay_url %}
+                <a class="btn btn-primary" href="{{ settings.chime_pay_url }}" target="_blank" rel="noopener">
+                  Pay now
+                </a>
+              {% endif %}
+            </div>
           {% endif %}
+
           {% if settings and settings.chime_qr_url %}
-            <img class="qr" src="{{ settings.chime_qr_url }}" alt="Chime QR">
+            <img class="qr" src="{{ settings.chime_qr_url }}" alt="Chime QR" style="margin-top:10px">
           {% endif %}
         </div>
       {% endif %}
@@ -73,4 +99,31 @@
   </div>
 
 </div>
+
+<script>
+  async function copyPayField() {
+    try {
+      const el = document.getElementById('copyField');
+      if (!el) return;
+      el.select();
+      el.setSelectionRange(0, 99999);
+      await navigator.clipboard.writeText(el.value);
+      showToast('Copied to clipboard');
+    } catch (e) {
+      showToast('Copy failed — select & press Ctrl/Cmd+C');
+    }
+  }
+
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = `
+      position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+      background: #1f2937; color: #e5e7eb; padding: 10px 14px; border-radius: 8px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.35); z-index: 9999; font-size: 14px;
+    `;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 1800);
+  }
+</script>
 {% endblock %}

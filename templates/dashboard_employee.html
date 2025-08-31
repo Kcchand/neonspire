@@ -10,6 +10,7 @@
       <div class="admin-actions" style="display:flex;gap:8px;flex-wrap:wrap">
         <a class="btn chip-btn" href="{{ url_for('employeebp.deposits_list') }}">Deposits</a>
         <a class="btn chip-btn" href="{{ url_for('employeebp.requests_list') }}">Game Requests</a>
+        <a class="btn chip-btn" href="{{ url_for('employeebp.ready_accounts_page') }}">Ready Accounts</a>
         <a class="btn chip-btn" href="{{ url_for('employeebp.withdrawals_list') }}">Withdrawals</a>
         <a class="btn chip-btn btn-primary" href="{{ url_for('chat_bp.inbox') }}">Live Chat</a>
       </div>
@@ -36,7 +37,7 @@
         <a class="btn btn-mini" href="{{ url_for('employeebp.requests_list') }}">Provide Logins</a>
       </div>
       <div class="muted" style="margin-top:6px;font-size:12px">
-        Tip: Open a request with “Provide Logins.” Inside the card you’ll find <b>Save</b>, <b>Approve</b>, and <b>Reject</b>.
+        Tip: Open a request with <b>Provide Logins</b>. Inside the card you’ll find <b>Save</b>, <b>Approve</b>, and <b>Reject</b>.
       </div>
     </div>
 

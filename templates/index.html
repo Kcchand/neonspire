@@ -66,7 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
     clones++;
   }
 
-  const pxPerSec = 120;                // tweak for speed
+  const pxPerSec = 120;
   const distance = track.scrollWidth / 2;
   const duration = Math.max(12, Math.round(distance / pxPerSec));
   track.style.setProperty("--marquee-distance", `-${distance}px`);
@@ -152,16 +152,13 @@ document.addEventListener("DOMContentLoaded", () => {
       <div class="rail-sub" style="margin-top:8px">We’re available 24/7.</div>
     </div>
 
-    <!-- Referral -->
+    {# ================= Referral: ONLY for logged-in PLAYERS ================= #}
+    {% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
     <div class="rail-card">
       <div class="rail-title">Referral Program</div>
-      {% if current_user.is_authenticated %}
-        <!-- wired to popup (no page change) -->
-        <a class="btn btn-wide" href="#" id="getRefLinkBtn">Get My Link</a>
-      {% else %}
-        <a class="btn btn-wide" href="{{ url_for('auth.register_get') }}">Get My Link</a>
-      {% endif %}
+      <a class="btn btn-wide" href="#" id="getRefLinkBtn">Get My Link</a>
     </div>
+    {% endif %}
   </aside>
 
   <!-- Main column -->
@@ -238,21 +235,18 @@ document.addEventListener("DOMContentLoaded", () => {
   </section>
 </div>
 
-{# ---- External link fail-safe: opens off-site links in a new tab even if a global handler cancels clicks ---- #}
+{# ---- External link fail-safe ---- #}
 <script>
 document.addEventListener('DOMContentLoaded', function () {
   function isExternal(href) {
-    try {
-      const u = new URL(href, window.location.href);
-      return u.origin !== window.location.origin;
-    } catch { return false; }
+    try { const u = new URL(href, window.location.href); return u.origin !== window.location.origin; }
+    catch { return false; }
   }
-
   document.querySelectorAll('a[data-external], a[target="_blank"]').forEach(function (a) {
-    if (!isExternal(a.href)) return; // ignore internal links
+    if (!isExternal(a.href)) return;
     a.addEventListener('click', function (e) {
       e.preventDefault();
-      e.stopImmediatePropagation();   // bypass any global .btn handlers
+      e.stopImmediatePropagation();
       try { window.open(a.href, '_blank', 'noopener'); }
       catch (_) { window.location.href = a.href; }
       return false;
@@ -261,7 +255,8 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-{# ============================ REFERRAL POPUP (NO NEW PAGE) ============================ #}
+{# ============================ REFERRAL POPUP & JS (only for players) ============================ #}
+{% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
 <div id="refModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="refTitle"
      style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:9999;">
   <!-- overlay -->
@@ -296,8 +291,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         <div class="muted" style="margin-top:8px;font-size:12px">
             Refer your friends and family to get exciting bonus 🎁
-
-       </div>
+        </div>
       </div>
 
       <div id="refError" style="display:none;color:#ff8a8a">Couldn’t get your link. Please try again.</div>
@@ -322,16 +316,9 @@ document.addEventListener('DOMContentLoaded', function () {
   const openBtn    = document.getElementById('openRefBtn');
   const regenBtn   = document.getElementById('newRefBtn');
 
-  function openModal(){
-    modal.style.display = 'flex';
-    document.body.style.overflow = 'hidden';
-  }
-  function closeModal(){
-    modal.style.display = 'none';
-    document.body.style.overflow = '';
-  }
+  function openModal(){ modal.style.display = 'flex'; document.body.style.overflow = 'hidden'; }
+  function closeModal(){ modal.style.display = 'none'; document.body.style.overflow = ''; }
   function setState(state){
-    // states: loading | result | error
     loadingEl.style.display = state==='loading' ? '' : 'none';
     resultEl.style.display  = state==='result'  ? '' : 'none';
     errorEl.style.display   = state==='error'   ? '' : 'none';
@@ -341,53 +328,35 @@ document.addEventListener('DOMContentLoaded', function () {
     setState('loading');
     try{
       const r = await fetch(jsonUrl, {credentials:'same-origin', headers:{'Accept':'application/json'}});
-      if(r.status === 401 || r.status === 403){
-        // not signed in — bounce to login
-        window.location.href = "{{ url_for('auth.login_get') }}";
-        return;
-      }
       if(!r.ok) throw new Error('bad response');
       const data = await r.json();
       inputEl.value = data.link || '';
       codeEl.textContent = data.code || '—';
       openBtn.href = data.link || '#';
       setState('result');
-    }catch(e){
-      setState('error');
-    }
+    }catch(e){ setState('error'); }
   }
 
-  // open + initial fetch
   btn.addEventListener('click', (e)=>{
     e.preventDefault();
     openModal();
     fetchRef("{{ url_for('playerbp.referral_my_link_json') }}");
   });
 
-  // regenerate (gets a fresh code if your backend chooses to — otherwise returns same)
-  regenBtn.addEventListener('click', ()=>{
-    fetchRef("{{ url_for('playerbp.referral_my_link_json') }}?force=1");
-  });
+  regenBtn.addEventListener('click', ()=>{ fetchRef("{{ url_for('playerbp.referral_my_link_json') }}?force=1"); });
 
-  // copy
   copyBtn.addEventListener('click', async ()=>{
     try{
       inputEl.select(); inputEl.setSelectionRange(0, 99999);
-      if(navigator.clipboard && window.isSecureContext){
-        await navigator.clipboard.writeText(inputEl.value);
-      }else{
-        document.execCommand('copy');
-      }
-      copyBtn.textContent = 'Copied!';
-      setTimeout(()=>copyBtn.textContent='Copy', 1200);
-    }catch(_){
-      alert('Copied!');
-    }
+      if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(inputEl.value); }
+      else { document.execCommand('copy'); }
+      copyBtn.textContent = 'Copied!'; setTimeout(()=>copyBtn.textContent='Copy', 1200);
+    }catch(_){ alert('Copied!'); }
   });
 
-  // close handlers
   [closeBtn, overlay].forEach(el => el.addEventListener('click', closeModal));
   document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && modal.style.display === 'flex'){ closeModal(); } });
 })();
 </script>
+{% endif %}
 {% endblock %}

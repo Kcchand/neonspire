@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="shell" style="margin-top:14px">
+
+  <!-- Header -->
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
+    <div class="h3">Ready Accounts</div>
+    <a class="btn" href="{{ url_for('employeebp.employee_home') }}">← Back</a>
+  </div>
+
+  {% if not pool_available %}
+    <div class="panel">
+      <div class="muted">
+        Ready account pool is not configured. Define a <code>ReadyAccountPool</code> model to enable this page.
+      </div>
+    </div>
+  {% endif %}
+
+  {% if pool_available %}
+    <!-- Add form -->
+    <div class="panel" style="margin-bottom:12px">
+      <form method="post"
+            action="{{ url_for('employeebp.ready_accounts_add') }}"
+            style="display:grid;grid-template-columns:220px 1fr 1fr 1fr auto;gap:8px">
+        <select class="input" name="game_id" required>
+          <option value="">Select game…</option>
+          {% for b in buckets %}
+            <option value="{{ b.game.id }}">{{ b.game.name }}</option>
+          {% endfor %}
+        </select>
+        <input class="input" name="username" placeholder="Username" required>
+        <input class="input" name="password" placeholder="Password" required>
+        <input class="input" name="note" placeholder="Note (optional)">
+        <button class="btn btn-primary" type="submit">Add</button>
+      </form>
+      <div class="muted" style="margin-top:6px;font-size:12px">
+        When you add an account, the system immediately tries to fulfill any open requests for that game.
+      </div>
+    </div>
+
+    <!-- Buckets by game -->
+    {% for b in buckets %}
+      <div class="panel" style="margin-top:12px">
+        <div class="h4" style="display:flex;align-items:center;justify-content:space-between">
+          <div>{{ b.game.name }}</div>
+          <div class="muted">Available: <strong>{{ b.count }}</strong></div>
+        </div>
+
+        {% if b.count %}
+          <div class="table">
+            <div class="t-head">
+              <div>Username</div>
+              <div>Password</div>
+              <div>Note</div>
+              <div>Added</div>
+              <div class="t-right">Actions</div>
+            </div>
+            {% for r in b.rows %}
+              <div class="t-row">
+                <div class="mono">{{ r.username }}</div>
+                <div class="mono">{{ r.password }}</div>
+                <div>{{ r.note or '—' }}</div>
+                <div class="mono">
+                  {% if r.created_at %}{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
+                </div>
+                <div class="t-right">
+                  <form method="post"
+                        action="{{ url_for('employeebp.ready_accounts_delete', row_id=r.id) }}"
+                        onsubmit="return confirm('Delete this ready account?');">
+                    <button class="btn btn-mini" type="submit">Delete</button>
+                  </form>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty">No ready accounts saved for this game.</div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% endif %}
+
+</div>
+{% endblock %}

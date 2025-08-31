@@ -5,6 +5,10 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# NEW: event utilities for auto-fulfill
+from sqlalchemy import event
+from sqlalchemy.orm import object_session
+
 db = SQLAlchemy()
 
 # ========================= Users =========================
@@ -111,6 +115,10 @@ class PaymentSettings(db.Model):
     crypto_qr_url = db.Column(db.String(500), default="")
     chime_handle = db.Column(db.String(255), default="@your-chime")
     chime_qr_url = db.Column(db.String(500), default="")
+
+    # NEW: optional direct pay links (for "Pay now" buttons)
+    crypto_pay_url = db.Column(db.String(500), default="")
+    chime_pay_url  = db.Column(db.String(500), default="")
 
     # promo math / withdrawal limits
     bonus_percent = db.Column(db.Integer, default=0)
@@ -240,6 +248,37 @@ class GameAccount(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+# ========================= Ready Accounts Pool (NEW) =========================
+class ReadyAccount(db.Model):
+    """
+    Employees/Admins can 'stock' ready-to-use credentials per game.
+    When a player requests access, the system can instantly claim one,
+    create a GameAccount for the player, and mark the pool row as claimed.
+    """
+    __tablename__ = "ready_accounts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey("games.id"), nullable=False, index=True)
+
+    username = db.Column(db.String(120), nullable=False)
+    password = db.Column(db.String(120), nullable=False)
+    note     = db.Column(db.String(300), default="")
+
+    is_claimed = db.Column(db.Boolean, default=False, index=True)
+    claimed_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)  # player_id
+    claimed_at = db.Column(db.DateTime, nullable=True)
+
+    added_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)  # stocking employee/admin
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("game_id", "username", name="uq_ready_accounts_game_username"),
+    )
+
+# Back-compat alias for blueprints/routes expecting `ReadyAccountPool`
+ReadyAccountPool = ReadyAccount
+
+
 # ========================= Notifications =========================
 class Notification(db.Model):
     __tablename__ = "notifications"
@@ -252,7 +291,27 @@ class Notification(db.Model):
 
 
 def notify(user_id: int, message: str):
-    n = Notification(user_id=user_id, message=message, is_read=False)
+    """
+    Create a notification unless an identical unread one already exists
+    very recently (5 minutes). This prevents accidental duplicates from
+    double submits or multiple code paths.
+    """
+    try:
+        recent = (
+            Notification.query
+            .filter(Notification.user_id == user_id)
+            .filter(Notification.message == message)
+            .filter(Notification.is_read == False)  # noqa: E712
+            .order_by(Notification.created_at.desc())
+            .first()
+        )
+        if recent and (datetime.utcnow() - (recent.created_at or datetime.utcnow())) < timedelta(minutes=5):
+            return  # skip duplicate
+    except Exception:
+        # if anything goes wrong with the check, still try to create the note
+        db.session.rollback()
+
+    n = Notification(user_id=user_id, message=message, is_read=False, created_at=datetime.utcnow())
     db.session.add(n)
     db.session.commit()
 
@@ -366,3 +425,108 @@ def get_or_create_referral_for_user(user_id: int) -> ReferralCode:
     db.session.add(rec)
     db.session.commit()
     return rec
+
+
+# =============== AUTO-FULFILL GAME REQUESTS ON INSERT (NO EMPLOYEE CLICK) ===============
+@event.listens_for(GameAccountRequest, "after_insert")
+def _autofulfill_game_request_on_insert(mapper, connection, req: GameAccountRequest):
+    """
+    Instantly fulfill a new GameAccountRequest if a ReadyAccount is available for the same game.
+    Runs inside the same transaction/flush that inserted the request.
+    - Claims the oldest available ReadyAccount
+    - Creates/updates player's GameAccount with credentials
+    - Marks request APPROVED (+ approved_at)
+    - Adds a Notification row (no external commit)
+    """
+    try:
+        sess = object_session(req)
+        if sess is None or not req or not req.game_id or not req.user_id:
+            return
+
+        # Oldest available ready account for this game
+        q = (
+            sess.query(ReadyAccount)
+            .filter(ReadyAccount.game_id == req.game_id)
+            .order_by(ReadyAccount.created_at.asc())
+        )
+        # prefer unclaimed if the column exists
+        if hasattr(ReadyAccount, "is_claimed"):
+            q = q.filter(ReadyAccount.is_claimed == False)  # noqa: E712
+
+        ra = q.first()
+        if not ra:
+            return  # nothing available; leave request pending
+
+        # Ensure or create GameAccount
+        acc = (
+            sess.query(GameAccount)
+            .filter(GameAccount.user_id == req.user_id, GameAccount.game_id == req.game_id)
+            .first()
+        )
+        if not acc:
+            acc = GameAccount(
+                user_id=req.user_id,
+                game_id=req.game_id,
+                created_at=datetime.utcnow(),
+            )
+            sess.add(acc)
+
+        # Credentials
+        username_val = getattr(ra, "username", "")
+        password_val = getattr(ra, "password", "")
+        if hasattr(acc, "account_username"):
+            acc.account_username = username_val
+        elif hasattr(acc, "username"):
+            acc.username = username_val
+        elif hasattr(acc, "login"):
+            acc.login = username_val
+
+        if hasattr(acc, "account_password"):
+            acc.account_password = password_val
+        elif hasattr(acc, "password"):
+            acc.password = password_val
+        elif hasattr(acc, "passcode"):
+            acc.passcode = password_val
+
+        note_val = getattr(ra, "note", "") or ""
+        if hasattr(acc, "extra"):
+            acc.extra = note_val
+        elif hasattr(acc, "note"):
+            acc.note = note_val
+
+        if hasattr(acc, "request_id"):
+            acc.request_id = req.id
+        if hasattr(acc, "issued_at"):
+            acc.issued_at = datetime.utcnow()
+        # issued_by_id is unknown here (no current_user in model layer)
+
+        # Approve the request
+        req.status = "APPROVED"
+        if hasattr(req, "approved_at"):
+            req.approved_at = datetime.utcnow()
+
+        # Claim or consume the ready account entry
+        if hasattr(ra, "is_claimed"):
+            ra.is_claimed = True
+            if hasattr(ra, "claimed_by"):
+                ra.claimed_by = req.user_id
+            if hasattr(ra, "claimed_at"):
+                ra.claimed_at = datetime.utcnow()
+        else:
+            # Back-compat: if no "is_claimed" field exists, delete the row
+            sess.delete(ra)
+
+        # Enqueue notification (avoid notify() which commits)
+        game = sess.get(Game, req.game_id)
+        game_name = game.name if game else f"Game #{req.game_id}"
+        sess.add(Notification(
+            user_id=req.user_id,
+            message=f"✅ Your login for {game_name} is ready. Check My Logins.",
+            is_read=False,
+            created_at=datetime.utcnow(),
+        ))
+
+        # No explicit commit; runs within current flush/transaction
+    except Exception:
+        # Make sure a failure here never breaks the original insert
+        pass

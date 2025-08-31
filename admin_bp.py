@@ -359,6 +359,12 @@ def settings_get():
 def update_crypto_qr():
     s = _get_settings()
     s.crypto_wallet_text = (request.form.get("crypto_wallet_text") or "").strip()
+
+    # NEW: save optional direct-pay URL (and mirror to kv for safety)
+    crypto_pay_url = (request.form.get("crypto_pay_url") or "").strip()
+    _maybe_set(s, "crypto_pay_url", crypto_pay_url)
+    _kv_set("crypto_pay_url", crypto_pay_url)
+
     qr_file = request.files.get("crypto_qr")
     url = _save_image(qr_file, "crypto_qr")
     if url:
@@ -372,6 +378,12 @@ def update_crypto_qr():
 def update_chime_qr():
     s = _get_settings()
     s.chime_handle = (request.form.get("chime_handle") or "").strip()
+
+    # NEW: save optional direct-pay URL (and mirror to kv for safety)
+    chime_pay_url = (request.form.get("chime_pay_url") or "").strip()
+    _maybe_set(s, "chime_pay_url", chime_pay_url)
+    _kv_set("chime_pay_url", chime_pay_url)
+
     qr_file = request.files.get("chime_qr")
     url = _save_image(qr_file, "chime_qr")
     if url:

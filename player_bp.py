@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import random
 import os
@@ -76,6 +76,8 @@ def _kv_first(*keys, default: str | None = None) -> str | None:
     return default
 
 # ---------- uploads (player-side) ----------
+_ALLOWED_PROOF_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
 def _uploads_dir() -> str:
     updir = os.path.join(current_app.static_folder, "uploads")
     os.makedirs(updir, exist_ok=True)
@@ -88,15 +90,22 @@ def _save_image(file_storage, prefix: str) -> str | None:
     """
     if not file_storage or not getattr(file_storage, "filename", ""):
         return None
-    filename = secure_filename(file_storage.filename)
+    filename = secure_filename(file_storage.filename or "")
+    if not filename:
+        return None
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
-        flash("Only PNG/JPG/WEBP images are allowed for proof.", "error")
+    if ext not in _ALLOWED_PROOF_EXTS:
+        flash("Only PNG, JPG, WEBP or GIF images are allowed for proof.", "error")
         return None
     ts = int(time.time())
-    new_name = f"{prefix}_{current_user.id}_{ts}{ext}"
+    uid = current_user.id if current_user and current_user.is_authenticated else "anon"
+    new_name = f"{prefix}_{uid}_{ts}{ext}"
     dest = os.path.join(_uploads_dir(), new_name)
-    file_storage.save(dest)
+    try:
+        file_storage.save(dest)
+    except Exception:
+        flash("Could not save your screenshot. Please try a different image.", "error")
+        return None
     return url_for("static", filename=f"uploads/{new_name}")
 
 # ---------- helpers ----------
@@ -309,31 +318,54 @@ def request_game_account(game_id: int):
         notify(current_user.id, "⚠️ You already have this game account. Check My Logins.")
         return redirect(url_for("playerbp.mylogin", noinfo=1))  # suppress banner
 
-    # Existing open request?
+    # -------- STRONG duplicate guard (blocks double submit/race) --------
+    # If there is ANY very recent request (any status) OR any currently-open request
+    # OR an already-approved/provided one, do not create a new row.
+    recent_cutoff = datetime.utcnow() - timedelta(seconds=60)
+
     exists = (
-        GameAccountRequest.query.filter_by(user_id=current_user.id, game_id=game_id)
-        .filter(GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"]))
+        GameAccountRequest.query
+        .filter_by(user_id=current_user.id, game_id=game_id)
+        .filter(
+            (GameAccountRequest.created_at >= recent_cutoff) |
+            (GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"])) |
+            (GameAccountRequest.status.in_(["APPROVED", "PROVIDED"]))
+        )
         .first()
     )
-    if exists:
-        flash("You already have an open request for this game.", "error")
-        return redirect(url_for("playerbp.mylogin", noinfo=1))
 
-    req = GameAccountRequest(
-        user_id=current_user.id,
-        game_id=game_id,
-        status="PENDING",
-        created_at=datetime.utcnow(),
-    )
+    if exists:
+        st = (exists.status or "").upper()
+        if st in ("APPROVED", "PROVIDED"):
+            flash("✅ Credentials already issued for this game. Check My Logins.", "success")
+        else:
+            flash("✅ Request submitted. You’ll receive credentials soon.", "success")
+        return redirect(url_for("playerbp.mylogin", noinfo=1))
+    # --------------------------------------------------------------------
+
+    # Create request
+    req = GameAccountRequest(user_id=current_user.id, game_id=game_id)
     db.session.add(req)
+
+    # Flush to fire the after_insert listener, then commit
+    db.session.flush()
     db.session.commit()
 
-    notify(current_user.id, f"Your access request for {game.name} is being processed.")
+    # Decide based on whether a GameAccount was issued by the listener
+    issued = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
+    if issued:
+        # Auto-fulfilled; listener already queued the "login ready" notification
+        flash(f"✅ Your login for {game.name} is ready. Check My Logins.", "success")
+    else:
+        # Not auto-fulfilled -> send ONE "processing" notification + flash
+        notify(current_user.id, f"🕓 Your access request for {game.name} is being processed.")
+        flash("✅ Request submitted. You’ll receive credentials soon.", "success")
+
+    # Staff heads-up (kept)
     for staff in User.query.filter(User.role.in_(("EMPLOYEE", "ADMIN"))).all():
         pname = current_user.name or current_user.email or f"Player #{current_user.id}"
         notify(staff.id, f"New game access request: {game.name} by {pname}")
 
-    flash("✅ Request submitted. You’ll receive credentials soon.", "success")
     return redirect(url_for("index"))
 
 # =============  LEGACY DEPOSIT — 2 steps (kept)  =============

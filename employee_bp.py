@@ -4,7 +4,7 @@ from collections import defaultdict
 
 from flask import Blueprint, render_template, render_template_string, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
-from sqlalchemy import text, or_, func, and_
+from sqlalchemy import text, or_, func
 
 from models import (
     db,
@@ -17,8 +17,15 @@ from models import (
     WithdrawRequest,
     ReferralCode,
     notify,
-    PaymentSettings,   # <-- added for bonus %
+    PaymentSettings,   # bonus %, limits, etc.
 )
+
+# -------------------- Ready Accounts model (alias to your models.ReadyAccount) --------------------
+try:
+    # Your models.py defines ReadyAccount (NOT ReadyAccountPool). Alias it so helpers work.
+    from models import ReadyAccount as ReadyAccountPool  # type: ignore
+except Exception:  # pragma: no cover
+    ReadyAccountPool = None  # sentinel so features auto-disable gracefully
 
 employee_bp = Blueprint("employeebp", __name__, url_prefix="/employee")
 
@@ -109,6 +116,291 @@ def _refcodes_for_user_ids(user_ids):
     return {r.user_id: r.code for r in rows}
 
 
+# -------------------- Ready Accounts: helpers --------------------
+def _pool_counts_by_game():
+    """
+    Returns {game_id: count} of *available* ready accounts if ReadyAccountPool exists,
+    else empty dict.
+    """
+    if not ReadyAccountPool:
+        return {}
+    q = db.session.query(ReadyAccountPool.game_id, func.count(ReadyAccountPool.id))
+    if hasattr(ReadyAccountPool, "is_claimed"):
+        q = q.filter(ReadyAccountPool.is_claimed == False)  # only unclaimed
+    rows = q.group_by(ReadyAccountPool.game_id).all()
+    return {gid: int(cnt or 0) for gid, cnt in rows}
+
+def _autofulfill_from_pool(req: GameAccountRequest) -> bool:
+    """
+    If a ready account exists for req.game_id, claim it and approve the request,
+    creating/updating the player's GameAccount. Returns True if fulfilled.
+    Safe no-op if ReadyAccountPool is not defined.
+    """
+    if not ReadyAccountPool or not req or not req.game_id or not req.user_id:
+        return False
+
+    # already approved? nothing to do
+    if (req.status or "").upper() in ("APPROVED", "PROVIDED"):
+        return False
+
+    # pick oldest available ready account for this game
+    q = ReadyAccountPool.query.filter_by(game_id=req.game_id)
+    if hasattr(ReadyAccountPool, "is_claimed"):
+        q = q.filter(ReadyAccountPool.is_claimed == False)
+    pool_row = q.order_by(ReadyAccountPool.created_at.asc()).first()
+    if not pool_row:
+        return False
+
+    username = _first_attr(pool_row, "username", "login", "account_username", default="")
+    password = _first_attr(pool_row, "password", "passcode", "account_password", default="")
+    note     = _first_attr(pool_row, "note", "extra", "remark", default="")
+
+    if not username or not password:
+        # invalid pool row; do not consume
+        return False
+
+    # ensure or create GameAccount for this player+game
+    acc = GameAccount.query.filter_by(user_id=req.user_id, game_id=req.game_id).first()
+    if not acc:
+        acc = GameAccount(user_id=req.user_id, game_id=req.game_id)
+        if hasattr(acc, "created_at") and not getattr(acc, "created_at", None):
+            acc.created_at = datetime.utcnow()
+        db.session.add(acc)
+
+    # link request if supported
+    if hasattr(acc, "request_id"):
+        acc.request_id = req.id
+
+    # write credentials
+    if hasattr(acc, "account_username"):
+        acc.account_username = username
+    elif hasattr(acc, "username"):
+        acc.username = username
+    elif hasattr(acc, "login"):
+        acc.login = username
+
+    if hasattr(acc, "account_password"):
+        acc.account_password = password
+    elif hasattr(acc, "password"):
+        acc.password = password
+    elif hasattr(acc, "passcode"):
+        acc.passcode = password
+
+    # note
+    if hasattr(acc, "extra"):
+        acc.extra = note
+    elif hasattr(acc, "note"):
+        acc.note = note
+    if hasattr(req, "note") and note:
+        req.note = note
+
+    # stamp issuer to current employee
+    if hasattr(acc, "issued_by_id") and current_user and current_user.is_authenticated:
+        acc.issued_by_id = current_user.id
+    if hasattr(acc, "issued_at"):
+        acc.issued_at = datetime.utcnow()
+
+    # close request
+    req.status = "APPROVED"
+    if hasattr(req, "approved_by_id") and current_user and current_user.is_authenticated:
+        req.approved_by_id = current_user.id
+    if hasattr(req, "handled_by") and current_user and current_user.is_authenticated:
+        req.handled_by = current_user.id
+    if hasattr(req, "approved_at"):
+        req.approved_at = datetime.utcnow()
+    if hasattr(req, "updated_at"):
+        req.updated_at = datetime.utcnow()
+
+    # consume/mark pool row
+    try:
+        if hasattr(pool_row, "is_claimed"):
+            pool_row.is_claimed = True
+            if hasattr(pool_row, "claimed_by"):
+                pool_row.claimed_by = req.user_id
+            if hasattr(pool_row, "claimed_at"):
+                pool_row.claimed_at = datetime.utcnow()
+        else:
+            db.session.delete(pool_row)
+    except Exception:
+        pass
+
+    db.session.commit()
+
+    # notify player
+    player = db.session.get(User, req.user_id)
+    game   = db.session.get(Game, req.game_id)
+    pname  = _display_name(player) if player else f"User #{req.user_id}"
+    gname  = game.name if game else "your game"
+    notify(req.user_id, f"🔐 {pname}, credentials added for {gname}. Check My Logins.")
+
+    return True
+
+
+# Try to autofulfill a batch of open requests (optionally by game)
+def _try_autofulfill_open_requests(game_id: int | None = None):
+    if not ReadyAccountPool:
+        return  # feature disabled gracefully
+
+    q = GameAccountRequest.query.filter(
+        GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"])
+    )
+    if game_id:
+        q = q.filter(GameAccountRequest.game_id == game_id)
+
+    for req in q.order_by(GameAccountRequest.created_at.asc()).all():
+        _autofulfill_from_pool(req)
+
+
+# -------------------- READY ACCOUNTS PAGE + CRUD --------------------
+@employee_bp.get("/ready-accounts", endpoint="ready_accounts_page")
+@login_required
+def ready_accounts_page():
+    """
+    Shows available ready accounts per game (if ReadyAccountPool/ReadyAccount exists).
+    """
+    games = Game.query.order_by(Game.name.asc()).all()
+    buckets = []
+
+    if ReadyAccountPool:
+        for g in games:
+            rows_q = ReadyAccountPool.query.filter_by(game_id=g.id)
+            if hasattr(ReadyAccountPool, "is_claimed"):
+                rows_q = rows_q.filter(ReadyAccountPool.is_claimed == False)
+            rows = rows_q.order_by(ReadyAccountPool.created_at.asc()).all()
+            norm = []
+            for r in rows:
+                norm.append({
+                    "id": getattr(r, "id", None),
+                    "username": _first_attr(r, "username", "login", "account_username", default=""),
+                    "password": _first_attr(r, "password", "passcode", "account_password", default=""),
+                    "note":     _first_attr(r, "note", "extra", "remark", default=""),
+                    "created_at": getattr(r, "created_at", None),
+                })
+            buckets.append({"game": g, "rows": norm, "count": len(norm)})
+    else:
+        buckets = []
+
+    ctx = {
+        "page_title": "Ready Accounts",
+        "buckets": buckets,
+        "pool_available": bool(ReadyAccountPool),
+    }
+
+    if _template_exists("employee_ready_accounts.html"):
+        return render_template("employee_ready_accounts.html", **ctx)
+
+    # Fallback inline template (view-only)
+    return render_template_string("""
+    {% extends "base.html" %}
+    {% block content %}
+    <div class="shell" style="margin-top:14px">
+      <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
+        <div class="h3">Ready Accounts</div>
+        <a class="btn" href="{{ url_for('employeebp.employee_home') }}">← Back</a>
+      </div>
+      {% if not pool_available %}
+        <div class="panel"><div class="muted">
+          Ready account pool is not configured. Define a <code>ReadyAccount</code> model to enable this page.
+        </div></div>
+      {% endif %}
+      {% for b in buckets %}
+        <div class="panel" style="margin-top:12px">
+          <div class="h4" style="display:flex;align-items:center;justify-content:space-between">
+            <div>{{ b.game.name }}</div>
+            <div class="muted">Available: <strong>{{ b.count }}</strong></div>
+          </div>
+          {% if b.count %}
+            <div class="table">
+              <div class="t-head">
+                <div>Username</div><div>Password</div><div>Note</div><div>Added</div>
+              </div>
+              {% for r in b.rows %}
+                <div class="t-row">
+                  <div class="mono">{{ r.username or '—' }}</div>
+                  <div class="mono">{{ r.password or '—' }}</div>
+                  <div>{{ r.note or '—' }}</div>
+                  <div class="mono">{% if r.created_at %}{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty">No ready accounts saved for this game.</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    {% endblock %}
+    """, **ctx)
+
+
+@employee_bp.post("/ready-accounts/add", endpoint="ready_accounts_add")
+@login_required
+def ready_accounts_add():
+    """
+    Add one ready account row for a game, then try auto-fulfilling open requests for that game.
+    """
+    if not ReadyAccountPool:
+        flash("Ready accounts feature is not configured.", "error")
+        return redirect(url_for("employeebp.ready_accounts_page"))
+
+    game_id = request.form.get("game_id", type=int)
+    username = (request.form.get("username") or "").strip()
+    password = (request.form.get("password") or "").strip()
+    note     = (request.form.get("note") or "").strip()
+
+    if not game_id or not username or not password:
+        flash("Game, username and password are required.", "error")
+        return redirect(url_for("employeebp.ready_accounts_page"))
+
+    row = ReadyAccountPool(
+        game_id=game_id,
+        username=username,
+        password=password,
+        note=note,
+    )
+    # If model has these columns, set them sensibly
+    if hasattr(row, "is_claimed"):
+        row.is_claimed = False
+    if hasattr(row, "added_by_id"):
+        row.added_by_id = current_user.id
+    if hasattr(row, "created_at") and not getattr(row, "created_at", None):
+        row.created_at = datetime.utcnow()
+
+    db.session.add(row)
+    db.session.commit()
+
+    # Try to fulfill immediately for this game
+    _try_autofulfill_open_requests(game_id=game_id)
+
+    flash("Ready account added.", "success")
+    return redirect(url_for("employeebp.ready_accounts_page"))
+
+
+@employee_bp.post("/ready-accounts/<int:row_id>/delete", endpoint="ready_accounts_delete")
+@login_required
+def ready_accounts_delete(row_id: int):
+    """
+    Delete a ready account row (only if it's not already claimed, if that column exists).
+    """
+    if not ReadyAccountPool:
+        flash("Ready accounts feature is not configured.", "error")
+        return redirect(url_for("employeebp.ready_accounts_page"))
+
+    row = db.session.get(ReadyAccountPool, row_id)
+    if not row:
+        flash("Row not found.", "error")
+        return redirect(url_for("employeebp.ready_accounts_page"))
+
+    if hasattr(row, "is_claimed") and row.is_claimed:
+        flash("This ready account was already claimed.", "error")
+        return redirect(url_for("employeebp.ready_accounts_page"))
+
+    db.session.delete(row)
+    db.session.commit()
+    flash("Ready account deleted.", "success")
+    return redirect(url_for("employeebp.ready_accounts_page"))
+
+
 # -------------------- home ----------------------
 @employee_bp.get("/")
 @login_required
@@ -196,9 +488,8 @@ def employee_home():
 def deposits_list():
     """
     - If a valid status is chosen (PENDING/RECEIVED/LOADED/REJECTED) or `q` is provided,
-      return a unified filtered list as `items` (template uses the 'items' branch).
-    - Otherwise, return the legacy split view: `pending` + `recent`, plus enriched rows for
-      inline account details (pending_rows/recent_rows).
+      return a unified filtered list as `items`.
+    - Otherwise, return the legacy split view: `pending` + `recent`, plus enriched rows.
     """
     ALLOWED = {"PENDING", "RECEIVED", "LOADED", "REJECTED"}
     status = (request.args.get("status") or "").upper().strip()
@@ -214,7 +505,6 @@ def deposits_list():
             base = base.filter(DepositRequest.status == status)
 
         if q:
-            # Search: user name/email or deposit id
             base = (
                 base.outerjoin(User, User.id == DepositRequest.user_id)
                     .filter(
@@ -235,7 +525,7 @@ def deposits_list():
         return render_template(
             "employee_deposits.html",
             page_title="Deposits",
-            items=items,               # <- template will render the unified 'items' table
+            items=items,
             users=users_map,
             refcodes=refcodes,
             status=status,
@@ -305,7 +595,6 @@ def deposits_list():
     return render_template(
         "employee_deposits.html",
         page_title="Deposits",
-        # original context (kept)
         pending=pending,
         recent=recent,
         users=users_map,
@@ -313,7 +602,6 @@ def deposits_list():
         status="",
         q="",
         settings=settings,
-        # new enriched rows (for showing login details nicely, if your template uses them)
         pending_rows=pending_rows,
         recent_rows=recent_rows,
     )
@@ -436,6 +724,8 @@ def deposits_reject(dep_id: int):
 @employee_bp.get("/requests")
 @login_required
 def requests_list():
+    _try_autofulfill_open_requests(game_id=None)
+
     open_reqs = (
         GameAccountRequest.query.filter(
             GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"])
@@ -457,6 +747,8 @@ def requests_list():
 
     backend_urls = {gid: _backend_url_for(g) for gid, g in games.items()}
 
+    pool_counts = _pool_counts_by_game()
+
     return render_template(
         "employee_requests.html",
         page_title="Requests",
@@ -467,12 +759,16 @@ def requests_list():
         backend_urls=backend_urls,
         selected_game=None,
         refcodes=refcodes,
+        pool_counts=pool_counts,
+        pool_counts_for_selected=None,
     )
 
 
 @employee_bp.get("/requests/game/<int:game_id>")
 @login_required
 def requests_list_by_game(game_id: int):
+    _try_autofulfill_open_requests(game_id=game_id)
+
     game = db.session.get(Game, game_id)
     if not game:
         flash("Game not found.", "error")
@@ -503,6 +799,9 @@ def requests_list_by_game(game_id: int):
 
     backend_urls = {gid: _backend_url_for(g) for gid, g in games.items()}
 
+    pool_counts = _pool_counts_by_game()
+    selected_count = pool_counts.get(game_id, 0) if pool_counts else 0
+
     return render_template(
         "employee_requests.html",
         page_title=f"Requests • {game.name}",
@@ -513,6 +812,8 @@ def requests_list_by_game(game_id: int):
         backend_urls=backend_urls,
         selected_game=game,
         refcodes=refcodes,
+        pool_counts=pool_counts,
+        pool_counts_for_selected=selected_count,
     )
 
 
@@ -523,7 +824,7 @@ def requests_provide(req_id: int):
     Save credentials (or progress) for a request. On approve:
     - ensure a GameAccount exists
     - write the credentials
-    - ALWAYS stamp the issuer (so admin can see who created it)
+    - ALWAYS stamp the issuer
     - close the request and stamp approver/handler
     """
     req = db.session.get(GameAccountRequest, req_id)
@@ -531,7 +832,17 @@ def requests_provide(req_id: int):
         flash("Request not found.", "error")
         return redirect(url_for("employeebp.requests_list"))
 
+    # Allow 'auto' action to consume pool immediately
     action   = (request.form.get("action") or "approve").lower().strip()
+    if action == "auto":
+        if _autofulfill_from_pool(req):
+            flash("Request auto-fulfilled from ready accounts.", "success")
+            if request.referrer and f"/requests/game/{req.game_id}" in request.referrer:
+                return redirect(url_for("employeebp.requests_list_by_game", game_id=req.game_id))
+            return redirect(url_for("employeebp.requests_list"))
+        else:
+            flash("No ready account available for this game.", "error")
+
     username = (request.form.get("username") or "").strip()
     password = (request.form.get("password") or "").strip()
     note     = (request.form.get("note") or "").strip()
@@ -555,16 +866,13 @@ def requests_provide(req_id: int):
     acc = GameAccount.query.filter_by(user_id=req.user_id, game_id=req.game_id).first()
     if not acc:
         acc = GameAccount(user_id=req.user_id, game_id=req.game_id)
-        # ensure created_at for new rows if the column exists
         if hasattr(acc, "created_at") and not getattr(acc, "created_at", None):
             acc.created_at = datetime.utcnow()
         db.session.add(acc)
 
-    # Always link request
     if hasattr(acc, "request_id"):
         acc.request_id = req.id
 
-    # credentials
     if hasattr(acc, "account_username"):
         acc.account_username = username
     elif hasattr(acc, "username"):
@@ -579,7 +887,6 @@ def requests_provide(req_id: int):
     elif hasattr(acc, "passcode"):
         acc.passcode = password
 
-    # note
     if hasattr(acc, "extra"):
         acc.extra = note
     elif hasattr(acc, "note"):
@@ -587,14 +894,11 @@ def requests_provide(req_id: int):
     if hasattr(req, "note") and note:
         req.note = note
 
-    # 🔴 ALWAYS stamp issuer (so admin "Issued By" works)
     if hasattr(acc, "issued_by_id"):
         acc.issued_by_id = current_user.id
-    # always stamp time if the column exists
     if hasattr(acc, "issued_at"):
         acc.issued_at = datetime.utcnow()
 
-    # close request + stamp approver/handler variants
     req.status = "APPROVED"
     if hasattr(req, "approved_by_id"):
         req.approved_by_id = current_user.id
@@ -613,7 +917,7 @@ def requests_provide(req_id: int):
     pname  = _display_name(player) if player else f"User #{req.user_id}"
     game   = db.session.get(Game, req.game_id)
     gname  = game.name if game else "your game"
-    notify(req.user_id, f"🔐 {pname}, credentials added for {gname}. Check My Logins.")
+    notify(req.user_id, f"🤖 {gname}: your login was issued. Open My Logins to view it, {pname}.")
 
     if request.referrer and f"/requests/game/{req.game_id}" in request.referrer:
         return redirect(url_for("employeebp.requests_list_by_game", game_id=req.game_id))
