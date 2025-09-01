@@ -22,6 +22,14 @@
     .brand { display:flex; gap:10px; align-items:center; text-decoration:none; color:inherit; font-weight:900; font-size:22px }
     .brand-logo { height:30px; width:auto; display:block; filter: drop-shadow(0 0 6px rgba(0,255,233,.45)); }
     @media (max-width:480px){ .brand-text { font-size:18px } }
+
+    /* ===== Hero (banners) slot right under the nav ===== */
+    .hero-slot { position:relative; z-index:2; padding-top:12px; }
+    /* When the child template renders nothing, avoid an empty gap */
+    .hero-slot:empty { display:none; }
+
+    /* Ensure nothing above clips the hero area */
+    header.nav { overflow:visible; }
   </style>
 </head>
 
@@ -45,14 +53,12 @@
         {% if current_user.is_authenticated %}
           {% if current_user.role == 'ADMIN' %}
             <a class="pill" href="{{ url_for('adminbp.admin_home') }}">Admin</a>
-            <!-- NEW: direct link to the Players admin page (for delete etc.) -->
             <a class="pill" href="{{ url_for('adminbp.admin_players') }}">Players</a>
             <a class="pill" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
             <a class="pill" href="{{ url_for('adminbp.admin_users') }}">Employees</a>
           {% elif current_user.role == 'EMPLOYEE' %}
             <a class="pill" href="{{ url_for('employeebp.employee_home') }}">Employee</a>
           {% else %}
-            <!-- Updated: point directly to /mylogin -->
             <a class="pill" href="{{ url_for('short_bp.mylogin_clean') }}">My Logins</a>
           {% endif %}
 
@@ -77,10 +83,13 @@
     </div>
   </header>
 
-  <!-- Main Shell -->
-  <main style="padding-top:18px;padding-bottom:20px">
+  <!-- ===== Hero/Banners directly under the nav ===== -->
+  <div class="hero-slot">
     {% block hero %}{% endblock %}
+  </div>
 
+  <!-- Main Shell -->
+  <main style="padding-bottom:20px">
     <div class="shell" style="margin-top:12px">
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}

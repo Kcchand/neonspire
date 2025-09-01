@@ -47,10 +47,18 @@
 @keyframes news-marquee{ 0%{ transform: translateX(0); } 100%{ transform: translateX(var(--marquee-distance, -50%)); } }
 .news-ticker:hover .news-track{ animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce){ .news-track{ animation: none; } }
+
+/* --- page-scoped mobile helpers (desktop untouched) --- */
+.hide-mobile{ display:block !important; }
+.show-mobile{ display:none !important; }
+@media (max-width: 768px){
+  .hide-mobile{ display:none !important; }
+  .show-mobile{ display:block !important; }
+}
 </style>
 
 <script>
-/* Responsive marquee: duplicate content until long enough; set duration from width */
+/* Responsive marquee */
 document.addEventListener("DOMContentLoaded", () => {
   const track = document.getElementById("newsTrack");
   if(!track) return;
@@ -59,7 +67,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const baseHTML = track.innerHTML.trim();
   if (!baseHTML) return;
 
-  // build seamless loop
   let clones = 0, maxClones = 10;
   while (track.scrollWidth < container.clientWidth * 2 && clones < maxClones) {
     track.insertAdjacentHTML("beforeend", baseHTML);
@@ -72,7 +79,6 @@ document.addEventListener("DOMContentLoaded", () => {
   track.style.setProperty("--marquee-distance", `-${distance}px`);
   track.style.setProperty("--marquee-duration", `${duration}s`);
 
-  // recompute on resize (debounced)
   let t;
   window.addEventListener("resize", () => {
     clearTimeout(t);
@@ -102,7 +108,7 @@ document.addEventListener("DOMContentLoaded", () => {
   <!-- Left rail -->
   <aside class="rail">
 
-    <!-- Add Funds -->
+    <!-- Add Funds (kept as-is; visible on desktop & mobile) -->
     <div class="rail-card">
       <div class="rail-title">Add Funds</div>
       {% if current_user.is_authenticated %}
@@ -118,7 +124,7 @@ document.addEventListener("DOMContentLoaded", () => {
       {% endif %}
     </div>
 
-    <!-- Withdraw -->
+    <!-- Withdraw (kept as-is; visible on desktop & mobile) -->
     <div class="rail-card">
       <div class="rail-title">Withdraw</div>
       {% if current_user.is_authenticated %}
@@ -132,31 +138,28 @@ document.addEventListener("DOMContentLoaded", () => {
       {% endif %}
     </div>
 
-    <!-- Contact Us -->
-    <div class="rail-card" id="contact">
+    <!-- Contact Us (HIDE on mobile; we will render again below games) -->
+    <div class="rail-card hide-mobile" id="contact">
       <div class="rail-title">Contact Us</div>
-
-      {# Use settings.* if provided, else fallback to the known URLs #}
       {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/+12342795662') %}
       {% set tg = (settings.telegram_url if settings and settings.telegram_url else 'https://t.me/Neonspire') %}
       {% set fb = (settings.facebook_url if settings and settings.facebook_url else 'https://www.facebook.com/neonspirecas') %}
       {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/neonspirecasino') %}
-
       <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener noreferrer" data-external="1">WhatsApp</a>
         <a class="btn btn-mini btn-wide" href="{{ tg }}" target="_blank" rel="noopener noreferrer" data-external="1">Telegram</a>
         <a class="btn btn-mini btn-wide" href="{{ fb }}" target="_blank" rel="noopener noreferrer" data-external="1">Facebook</a>
         <a class="btn btn-mini btn-wide" href="{{ ig }}" target="_blank" rel="noopener noreferrer" data-external="1">Instagram</a>
       </div>
-
       <div class="rail-sub" style="margin-top:8px">We’re available 24/7.</div>
     </div>
 
-    {# ================= Referral: ONLY for logged-in PLAYERS ================= #}
+    {# Referral (HIDE on mobile; we will render again below games) #}
     {% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
-    <div class="rail-card">
+    <div class="rail-card hide-mobile">
       <div class="rail-title">Referral Program</div>
-      <a class="btn btn-wide" href="#" id="getRefLinkBtn">Get My Link</a>
+      <!-- CHANGED: use a button + class, not an <a id> -->
+      <button type="button" class="btn btn-wide js-ref-btn">Get My Link</button>
     </div>
     {% endif %}
   </aside>
@@ -232,6 +235,32 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
     </div>
 
+    {# ===== MOBILE ONLY: Contact Us + Referral BELOW the game list ===== #}
+    <div class="show-mobile" style="display:none">
+      <div class="panel" id="contact-mobile">
+        <div class="rail-title">Contact Us</div>
+        {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/+12342795662') %}
+        {% set tg = (settings.telegram_url if settings and settings.telegram_url else 'https://t.me/Neonspire') %}
+        {% set fb = (settings.facebook_url if settings and settings.facebook_url else 'https://www.facebook.com/neonspirecas') %}
+        {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/neonspirecasino') %}
+        <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener noreferrer" data-external="1">WhatsApp</a>
+          <a class="btn btn-mini btn-wide" href="{{ tg }}" target="_blank" rel="noopener noreferrer" data-external="1">Telegram</a>
+          <a class="btn btn-mini btn-wide" href="{{ fb }}" target="_blank" rel="noopener noreferrer" data-external="1">Facebook</a>
+          <a class="btn btn-mini btn-wide" href="{{ ig }}" target="_blank" rel="noopener noreferrer" data-external="1">Instagram</a>
+        </div>
+        <div class="muted" style="margin-top:8px">We’re available 24/7.</div>
+      </div>
+
+      {% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
+      <div class="panel">
+        <div class="rail-title">Referral Program</div>
+        <!-- CHANGED: use a button + class, not an <a id> -->
+        <button type="button" class="btn btn-wide js-ref-btn">Get My Link</button>
+      </div>
+      {% endif %}
+    </div>
+
   </section>
 </div>
 
@@ -259,11 +288,9 @@ document.addEventListener('DOMContentLoaded', function () {
 {% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
 <div id="refModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="refTitle"
      style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:9999;">
-  <!-- overlay -->
   <div data-ref-overlay
        style="position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:saturate(120%) blur(2px)"></div>
 
-  <!-- dialog -->
   <div class="panel" role="document"
        style="position:relative;max-width:640px;width:92%;border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.35);z-index:1">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
@@ -302,8 +329,8 @@ document.addEventListener('DOMContentLoaded', function () {
 <script>
 (function(){
   const modal   = document.getElementById('refModal');
-  const btn     = document.getElementById('getRefLinkBtn');
-  if(!modal || !btn) return;
+  const triggers = document.querySelectorAll('.js-ref-btn'); // <-- bind to ALL triggers, desktop + mobile
+  if(!modal || !triggers.length) return;
 
   const closeBtn   = document.getElementById('refCloseBtn');
   const overlay    = modal.querySelector('[data-ref-overlay]');
@@ -337,13 +364,19 @@ document.addEventListener('DOMContentLoaded', function () {
     }catch(e){ setState('error'); }
   }
 
-  btn.addEventListener('click', (e)=>{
-    e.preventDefault();
-    openModal();
-    fetchRef("{{ url_for('playerbp.referral_my_link_json') }}");
+  // bind to ALL visible buttons
+  triggers.forEach(btn => {
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      openModal();
+      fetchRef("{{ url_for('playerbp.referral_my_link_json') }}");
+    });
   });
 
-  regenBtn.addEventListener('click', ()=>{ fetchRef("{{ url_for('playerbp.referral_my_link_json') }}?force=1"); });
+  if(regenBtn){
+    regenBtn.addEventListener('click', ()=>{ fetchRef("{{ url_for('playerbp.referral_my_link_json') }}?force=1"); });
+  }
 
   copyBtn.addEventListener('click', async ()=>{
     try{
