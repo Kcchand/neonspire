@@ -478,7 +478,7 @@ def deposit_submit():
 
     notify(current_user.id, f"Deposit request #{dep.id} submitted. Your credits will appear shortly.")
     flash("Deposit submitted. We’ll notify you once it’s loaded.", "success")
-    return redirect(url_for("playerbp.player_dashboard"))
+    return redirect(url_for("index"))
 
 # =============  WITHDRAW (kept)  =============
 @player_bp.get("/withdraw")

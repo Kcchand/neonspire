@@ -2,22 +2,66 @@
 {% block content %}
 
 <style>
-  /* Subtle table polish + right-aligned actions */
+  /* Desktop / default */
   .tbl { width:100%; border-collapse:separate; border-spacing:0; }
   .tbl th, .tbl td { padding:10px 12px; vertical-align:middle; }
-  .tbl thead th { text-align:left; font-weight:700; opacity:.9; }
+  .tbl thead th { text-align:left; font-weight:700; opacity:.9; position:sticky; top:0; background:rgba(0,0,0,.25); backdrop-filter:blur(6px); }
   .tbl td.actions { text-align:right; white-space:nowrap; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
   .muted-wrap { display:flex; flex-direction:column; gap:2px; }
-  .cred { display:flex; gap:8px; align-items:center; }
+  .cred { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .cred .pill { padding:2px 8px; border-radius:8px; border:1px solid var(--stroke); font-size:12px; }
   .icon-btn { border:1px solid var(--stroke); border-radius:8px; background:transparent; padding:6px 8px; cursor:pointer; }
   .icon-btn[disabled] { opacity:.5; cursor:not-allowed; }
-  .between { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  .inline-form { display:flex; align-items:center; gap:8px; }
+  .between { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .inline-form { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mt24{margin-top:24px}
-  .row.gap8 { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
+  .row.gap8 { display:flex; gap:8px; align-items:center; justify-content:flex-end; flex-wrap:wrap; }
   .w-compact { width:1%; white-space:nowrap; }
+  .table-wrap { max-height: 70vh; overflow:auto; border:1px solid var(--stroke); border-radius:12px; box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+
+  /* Controls bar */
+  .controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .controls .input { min-width:200px; }
+
+  /* Floating scroll buttons */
+  .scroll-fab { position:fixed; right:16px; bottom:16px; display:flex; flex-direction:column; gap:8px; z-index:60; }
+  .scroll-fab .btn { border-radius:999px; padding:10px 12px; box-shadow:0 8px 24px rgba(0,0,0,.25); }
+
+  /* ---------- Mobile: convert table rows to cards ---------- */
+  @media (max-width: 768px){
+    .tbl thead { display:none; }
+    .table-wrap { max-height: none; overflow:visible; border:none; box-shadow:none; }
+    .tbl, .tbl tbody, .tbl tr, .tbl td { display:block; width:100%; }
+    .tbl tr {
+      background: rgba(255,255,255,.02);
+      border:1px solid var(--stroke);
+      border-radius:12px;
+      padding:10px;
+      margin-bottom:10px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.12);
+    }
+    .tbl td {
+      padding:8px 10px;
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:12px;
+    }
+    .tbl td::before {
+      content: attr(data-label);
+      font-weight:700;
+      opacity:.85;
+      margin-right:12px;
+      flex: 0 0 auto;
+    }
+    .tbl td > *:not(.icon-btn) { max-width: 70%; }
+    .tbl td.actions { text-align:left; }
+    .row.gap8 { justify-content:flex-start; }
+    .w-compact { width:auto; white-space:normal; }
+    .between { gap:10px; }
+    .inline-form .input { min-width: 140px; }
+  }
 </style>
 
 <div class="card card-glass">
@@ -35,307 +79,419 @@
     </form>
   </div>
 
+  <!-- Client-side quick filter (instant) -->
+  <div class="controls mt12">
+    <input id="quickFilter" class="input" placeholder="Quick filter: user, game, method, id, login…">
+    <button class="btn btn-ghost" type="button" id="clearQuick">Clear</button>
+  </div>
+
   {% set bonus = (settings.bonus_percent if settings else 0) %}
 
-  {# =================== NEW ENHANCED RENDER (uses pending_rows / recent_rows) =================== #}
+  {# =================== ENHANCED RENDER (pending_rows / recent_rows) =================== #}
   {% if pending_rows is defined or recent_rows is defined %}
     <h3 class="h3 mt16">Pending</h3>
-    <table class="tbl mt8">
-      <thead>
-        <tr>
-          <th class="w-compact">ID</th>
-          <th>User</th>
-          <th>Game</th>
-          <th>Login</th>
-          <th>Amount</th>
-          <th>Method</th>
-          <th>Created</th>
-          <th class="actions w-compact">Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in pending_rows or [] %}
-          {% set d = r.dep %}
+    <div class="table-wrap">
+      <table class="tbl mt8 js-filter-table" data-section="pending">
+        <thead>
           <tr>
-            <td class="mono">#{{ d.id }}</td>
-            <td>
-              <div class="muted-wrap">
-                <strong>{{ r.user_name }}</strong>
-                {% if refcodes and refcodes.get(d.user_id) %}
-                  <span class="muted">Ref: {{ refcodes.get(d.user_id) }}</span>
-                {% endif %}
-              </div>
-            </td>
-            <td>{{ r.game_name }}</td>
-            <td>
-              {% if r.login_user or r.login_pass or r.login_note %}
-                <div class="cred">
-                  {% if r.login_user %}
-                    <span class="pill mono" title="Username">{{ r.login_user }}</span>
-                    <button class="icon-btn" type="button" data-copy="{{ r.login_user }}" title="Copy username">📋</button>
-                  {% endif %}
-                </div>
-                <div class="cred" style="margin-top:4px">
-                  {% if r.login_pass %}
-                    <span class="pill mono" title="Password">{{ r.login_pass }}</span>
-                    <button class="icon-btn" type="button" data-copy="{{ r.login_pass }}" title="Copy password">📋</button>
-                  {% endif %}
-                </div>
-                {% if r.login_note %}
-                  <div class="muted mono" style="margin-top:4px">{{ r.login_note }}</div>
-                {% endif %}
-              {% else %}
-                <span class="muted">No credentials on file</span>
-              {% endif %}
-            </td>
-            <td>{{ d.amount }}</td>
-            <td>{{ d.method }}</td>
-            <td class="mono">{{ d.created_at.strftime('%Y-%m-%d %H:%M') if d.created_at }}</td>
-            <td class="actions">
-              <div class="row gap8">
-                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
-                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
-                  <button class="btn btn-primary">Approve & Load (+{{ bonus or 0 }}%)</button>
-                </form>
-                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
-                  <button class="btn btn-ghost">Reject</button>
-                </form>
-              </div>
-            </td>
+            <th class="w-compact">ID</th>
+            <th>User</th>
+            <th>Game</th>
+            <th>Login</th>
+            <th>Amount</th>
+            <th>Method</th>
+            <th>Created</th>
+            <th class="actions w-compact">Action</th>
           </tr>
-        {% else %}
-          <tr><td colspan="8" class="muted">No pending deposits.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for r in pending_rows or [] %}
+            {% set d = r.dep %}
+            {% set backend_url = r.game_backend_url or r.backend_url
+                                  or (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
+            <tr>
+              <td class="mono" data-label="ID">#{{ d.id }}</td>
+              <td data-label="User">
+                <div class="muted-wrap">
+                  <strong>{{ r.user_name }}</strong>
+                  {% if refcodes and refcodes.get(d.user_id) %}
+                    <span class="muted">Ref: {{ refcodes.get(d.user_id) }}</span>
+                  {% endif %}
+                </div>
+              </td>
+              <td data-label="Game">
+                {% if backend_url %}
+                  <a href="{{ backend_url }}" target="_blank" rel="noopener" title="Open game backend">{{ r.game_name }}</a>
+                {% else %}
+                  {{ r.game_name }}
+                {% endif %}
+              </td>
+              <td data-label="Login">
+                {% if r.login_user or r.login_pass or r.login_note %}
+                  <div class="cred">
+                    {% if r.login_user %}
+                      <span class="pill mono" title="Username">{{ r.login_user }}</span>
+                      <button class="icon-btn" type="button" data-copy="{{ r.login_user }}" title="Copy username" aria-label="Copy username">📋</button>
+                    {% endif %}
+                  </div>
+                  <div class="cred" style="margin-top:4px">
+                    {% if r.login_pass %}
+                      <span class="pill mono" title="Password">{{ r.login_pass }}</span>
+                      <button class="icon-btn" type="button" data-copy="{{ r.login_pass }}" title="Copy password" aria-label="Copy password">📋</button>
+                    {% endif %}
+                  </div>
+                  {% if r.login_note %}
+                    <div class="muted mono" style="margin-top:4px">{{ r.login_note }}</div>
+                  {% endif %}
+                {% else %}
+                  <span class="muted">No credentials on file</span>
+                {% endif %}
+              </td>
+              <td data-label="Amount">{{ d.amount }}</td>
+              <td data-label="Method">{{ d.method }}</td>
+              <td class="mono" data-label="Created">{{ d.created_at.strftime('%Y-%m-%d %H:%M') if d.created_at }}</td>
+              <td class="actions" data-label="Action">
+                <div class="row gap8">
+                  {% if backend_url %}
+                    <a class="btn btn-ghost" href="{{ backend_url }}" target="_blank" rel="noopener">Open Backend</a>
+                  {% else %}
+                    <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                  {% endif %}
+                  <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                    <button class="btn btn-primary" type="submit">Approve & Load (+{{ bonus or 0 }}%)</button>
+                  </form>
+                  <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                    <button class="btn btn-ghost" type="submit">Reject</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="8" class="muted" data-label="Notice">No pending deposits.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
     <h3 class="h3 mt24">Recent</h3>
-    <table class="tbl mt8">
-      <thead>
-        <tr>
-          <th class="w-compact">ID</th>
-          <th>User</th>
-          <th>Game</th>
-          <th>Login</th>
-          <th>Amount</th>
-          <th>Method</th>
-          <th>Status</th>
-          <th>Updated</th>
-          <th class="actions w-compact">Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in recent_rows or [] %}
-          {% set d = r.dep %}
+    <div class="table-wrap">
+      <table class="tbl mt8 js-filter-table" data-section="recent">
+        <thead>
           <tr>
-            <td class="mono">#{{ d.id }}</td>
-            <td>
-              <div class="muted-wrap">
-                <strong>{{ r.user_name }}</strong>
-                {% if refcodes and refcodes.get(d.user_id) %}
-                  <span class="muted">Ref: {{ refcodes.get(d.user_id) }}</span>
-                {% endif %}
-              </div>
-            </td>
-            <td>{{ r.game_name }}</td>
-            <td>
-              {% if r.login_user or r.login_pass or r.login_note %}
-                <div class="cred">
-                  {% if r.login_user %}
-                    <span class="pill mono" title="Username">{{ r.login_user }}</span>
-                    <button class="icon-btn" type="button" data-copy="{{ r.login_user }}" title="Copy username">📋</button>
-                  {% endif %}
-                </div>
-                <div class="cred" style="margin-top:4px">
-                  {% if r.login_pass %}
-                    <span class="pill mono" title="Password">{{ r.login_pass }}</span>
-                    <button class="icon-btn" type="button" data-copy="{{ r.login_pass }}" title="Copy password">📋</button>
-                  {% endif %}
-                </div>
-                {% if r.login_note %}
-                  <div class="muted mono" style="margin-top:4px">{{ r.login_note }}</div>
-                {% endif %}
-              {% else %}
-                <span class="muted">No credentials on file</span>
-              {% endif %}
-            </td>
-            <td>{{ d.amount }}</td>
-            <td>{{ d.method }}</td>
-            <td>{{ d.status }}</td>
-            <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') if (d.updated_at or d.created_at) }}</td>
-            <td class="actions">
-              <div class="row gap8">
-                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
-                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
-                  <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
-                    Approve & Load (+{{ bonus or 0 }}%)
-                  </button>
-                </form>
-                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
-                  <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
-                </form>
-              </div>
-            </td>
+            <th class="w-compact">ID</th>
+            <th>User</th>
+            <th>Game</th>
+            <th>Login</th>
+            <th>Amount</th>
+            <th>Method</th>
+            <th>Status</th>
+            <th>Updated</th>
+            <th class="actions w-compact">Action</th>
           </tr>
-        {% else %}
-          <tr><td colspan="9" class="muted">No recent items.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for r in recent_rows or [] %}
+            {% set d = r.dep %}
+            {% set backend_url = r.game_backend_url or r.backend_url
+                                  or (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
+            <tr>
+              <td class="mono" data-label="ID">#{{ d.id }}</td>
+              <td data-label="User">
+                <div class="muted-wrap">
+                  <strong>{{ r.user_name }}</strong>
+                  {% if refcodes and refcodes.get(d.user_id) %}
+                    <span class="muted">Ref: {{ refcodes.get(d.user_id) }}</span>
+                  {% endif %}
+                </div>
+              </td>
+              <td data-label="Game">
+                {% if backend_url %}
+                  <a href="{{ backend_url }}" target="_blank" rel="noopener" title="Open game backend">{{ r.game_name }}</a>
+                {% else %}
+                  {{ r.game_name }}
+                {% endif %}
+              </td>
+              <td data-label="Login">
+                {% if r.login_user or r.login_pass or r.login_note %}
+                  <div class="cred">
+                    {% if r.login_user %}
+                      <span class="pill mono">{{ r.login_user }}</span>
+                      <button class="icon-btn" type="button" data-copy="{{ r.login_user }}" title="Copy username" aria-label="Copy username">📋</button>
+                    {% endif %}
+                  </div>
+                  <div class="cred" style="margin-top:4px">
+                    {% if r.login_pass %}
+                      <span class="pill mono">{{ r.login_pass }}</span>
+                      <button class="icon-btn" type="button" data-copy="{{ r.login_pass }}" title="Copy password" aria-label="Copy password">📋</button>
+                    {% endif %}
+                  </div>
+                  {% if r.login_note %}
+                    <div class="muted mono" style="margin-top:4px">{{ r.login_note }}</div>
+                  {% endif %}
+                {% else %}
+                  <span class="muted">No credentials on file</span>
+                {% endif %}
+              </td>
+              <td data-label="Amount">{{ d.amount }}</td>
+              <td data-label="Method">{{ d.method }}</td>
+              <td data-label="Status">{{ d.status }}</td>
+              <td class="mono" data-label="Updated">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') if (d.updated_at or d.created_at) }}</td>
+              <td class="actions" data-label="Action">
+                <div class="row gap8">
+                  {% if backend_url %}
+                    <a class="btn btn-ghost" href="{{ backend_url }}" target="_blank" rel="noopener">Open Backend</a>
+                  {% else %}
+                    <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                  {% endif %}
+                  <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                    <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                      Approve & Load (+{{ bonus or 0 }}%)
+                    </button>
+                  </form>
+                  <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                    <button class="btn btn-ghost" type="submit" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="9" class="muted" data-label="Notice">No recent items.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
-  {# =================== LEGACY RENDER (uses your original context) =================== #}
+  {# =================== LEGACY RENDER (items) =================== #}
   {% elif items is defined %}
-    <table class="tbl mt12">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>User</th>
-          <th>Amount</th>
-          <th>Method</th>
-          <th>Status</th>
-          <th>Updated</th>
-          <th class="actions">Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for d in items %}
-          {% set u = (users.get(d.user_id) if users is defined else None) %}
-          {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+    <div class="table-wrap">
+      <table class="tbl mt12 js-filter-table" data-section="legacy-items">
+        <thead>
           <tr>
-            <td class="mono">#{{ d.id }}</td>
-            <td>
-              {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
-              {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
-            </td>
-            <td>{{ d.amount }}</td>
-            <td>{{ d.method }}</td>
-            <td>{{ d.status }}</td>
-            <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
-            <td class="actions">
-              <div class="row gap8">
-                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
-                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
-                  <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
-                    Approve & Load (+{{ bonus or 0 }}%)
-                  </button>
-                </form>
-                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
-                  <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
-                </form>
-              </div>
-            </td>
+            <th>ID</th>
+            <th>User</th>
+            <th>Game</th>
+            <th>Amount</th>
+            <th>Method</th>
+            <th>Status</th>
+            <th>Updated</th>
+            <th class="actions">Action</th>
           </tr>
-        {% else %}
-          <tr><td colspan="7" class="muted">No items.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for d in items %}
+            {% set u = (users.get(d.user_id) if users is defined else None) %}
+            {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+            {% set game_name = (games[d.game_id].name if games is defined and games.get(d.game_id) else '—') %}
+            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
+            <tr>
+              <td class="mono" data-label="ID">#{{ d.id }}</td>
+              <td data-label="User">
+                {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
+                {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
+              </td>
+              <td data-label="Game">
+                {% if backend_url %}
+                  <a href="{{ backend_url }}" target="_blank" rel="noopener" title="Open game backend">{{ game_name }}</a>
+                {% else %}
+                  {{ game_name }}
+                {% endif %}
+              </td>
+              <td data-label="Amount">{{ d.amount }}</td>
+              <td data-label="Method">{{ d.method }}</td>
+              <td data-label="Status">{{ d.status }}</td>
+              <td class="mono" data-label="Updated">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
+              <td class="actions" data-label="Action">
+                <div class="row gap8">
+                  {% if backend_url %}
+                    <a class="btn btn-ghost" href="{{ backend_url }}" target="_blank" rel="noopener">Open Backend</a>
+                  {% else %}
+                    <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                  {% endif %}
+                  <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                    <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                      Approve & Load (+{{ bonus or 0 }}%)
+                    </button>
+                  </form>
+                  <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                    <button class="btn btn-ghost" type="submit" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="8" class="muted" data-label="Notice">No items.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
   {% else %}
     <h3 class="h3 mt16">Pending</h3>
-    <table class="tbl mt8">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>User</th>
-          <th>Amount</th>
-          <th>Method</th>
-          <th>Created</th>
-          <th class="actions">Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for d in pending %}
-          {% set u = (users.get(d.user_id) if users is defined else None) %}
-          {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+    <div class="table-wrap">
+      <table class="tbl mt8 js-filter-table" data-section="legacy-pending">
+        <thead>
           <tr>
-            <td class="mono">#{{ d.id }}</td>
-            <td>
-              {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
-              {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
-            </td>
-            <td>{{ d.amount }}</td>
-            <td>{{ d.method }}</td>
-            <td class="mono">{{ (d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
-            <td class="actions">
-              <div class="row gap8">
-                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
-                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
-                  <button class="btn btn-primary">Approve & Load (+{{ bonus or 0 }}%)</button>
-                </form>
-                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
-                  <button class="btn btn-ghost">Reject</button>
-                </form>
-              </div>
-            </td>
+            <th>ID</th>
+            <th>User</th>
+            <th>Game</th>
+            <th>Amount</th>
+            <th>Method</th>
+            <th>Created</th>
+            <th class="actions">Action</th>
           </tr>
-        {% else %}
-          <tr><td colspan="6" class="muted">No pending deposits.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for d in pending %}
+            {% set u = (users.get(d.user_id) if users is defined else None) %}
+            {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+            {% set game_name = (games[d.game_id].name if games is defined and games.get(d.game_id) else '—') %}
+            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
+            <tr>
+              <td class="mono" data-label="ID">#{{ d.id }}</td>
+              <td data-label="User">
+                {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
+                {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
+              </td>
+              <td data-label="Game">
+                {% if backend_url %}
+                  <a href="{{ backend_url }}" target="_blank" rel="noopener" title="Open game backend">{{ game_name }}</a>
+                {% else %}
+                  {{ game_name }}
+                {% endif %}
+              </td>
+              <td data-label="Amount">{{ d.amount }}</td>
+              <td data-label="Method">{{ d.method }}</td>
+              <td class="mono" data-label="Created">{{ (d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
+              <td class="actions" data-label="Action">
+                <div class="row gap8">
+                  {% if backend_url %}
+                    <a class="btn btn-ghost" href="{{ backend_url }}" target="_blank" rel="noopener">Open Backend</a>
+                  {% else %}
+                    <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                  {% endif %}
+                  <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                    <button class="btn btn-primary" type="submit">Approve & Load (+{{ bonus or 0 }}%)</button>
+                  </form>
+                  <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                    <button class="btn btn-ghost" type="submit">Reject</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="muted" data-label="Notice">No pending deposits.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
     <h3 class="h3 mt24">Recent</h3>
-    <table class="tbl mt8">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>User</th>
-          <th>Amount</th>
-          <th>Method</th>
-          <th>Status</th>
-          <th>Updated</th>
-          <th class="actions">Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for d in recent %}
-          {% set u = (users.get(d.user_id) if users is defined else None) %}
-          {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+    <div class="table-wrap">
+      <table class="tbl mt8 js-filter-table" data-section="legacy-recent">
+        <thead>
           <tr>
-            <td class="mono">#{{ d.id }}</td>
-            <td>
-              {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
-              {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
-            </td>
-            <td>{{ d.amount }}</td>
-            <td>{{ d.method }}</td>
-            <td>{{ d.status }}</td>
-            <td class="mono">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
-            <td class="actions">
-              <div class="row gap8">
-                <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
-                <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
-                  <button class="btn btn-primary" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
-                    Approve & Load (+{{ bonus or 0 }}%)
-                  </button>
-                </form>
-                <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
-                  <button class="btn btn-ghost" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
-                </form>
-              </div>
-            </td>
+            <th>ID</th>
+            <th>User</th>
+            <th>Game</th>
+            <th>Amount</th>
+            <th>Method</th>
+            <th>Status</th>
+            <th>Updated</th>
+            <th class="actions">Action</th>
           </tr>
-        {% else %}
-          <tr><td colspan="7" class="muted">No recent items.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for d in recent %}
+            {% set u = (users.get(d.user_id) if users is defined else None) %}
+            {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
+            {% set game_name = (games[d.game_id].name if games is defined and games.get(d.game_id) else '—') %}
+            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
+            <tr>
+              <td class="mono" data-label="ID">#{{ d.id }}</td>
+              <td data-label="User">
+                {{ (u.name if u and u.name else (u.email if u else 'User #' ~ d.user_id)) }}
+                {% if code %}<div class="muted">Ref: {{ code }}</div>{% endif %}
+              </td>
+              <td data-label="Game">
+                {% if backend_url %}
+                  <a href="{{ backend_url }}" target="_blank" rel="noopener" title="Open game backend">{{ game_name }}</a>
+                {% else %}
+                  {{ game_name }}
+                {% endif %}
+              </td>
+              <td data-label="Amount">{{ d.amount }}</td>
+              <td data-label="Method">{{ d.method }}</td>
+              <td data-label="Status">{{ d.status }}</td>
+              <td class="mono" data-label="Updated">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
+              <td class="actions" data-label="Action">
+                <div class="row gap8">
+                  {% if backend_url %}
+                    <a class="btn btn-ghost" href="{{ backend_url }}" target="_blank" rel="noopener">Open Backend</a>
+                  {% else %}
+                    <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
+                  {% endif %}
+                  <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
+                    <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                      Approve & Load (+{{ bonus or 0 }}%)
+                    </button>
+                  </form>
+                  <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
+                    <button class="btn btn-ghost" type="submit" {% if d.status in ['LOADED','REJECTED'] %}disabled{% endif %}>Reject</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="8" class="muted" data-label="Notice">No recent items.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% endif %}
 </div>
 
+<!-- Floating scroll controls -->
+<div class="scroll-fab" aria-hidden="false">
+  <button class="btn" type="button" id="scrollTopBtn" title="Scroll to top" aria-label="Scroll to top">⬆️</button>
+  <button class="btn" type="button" id="scrollBottomBtn" title="Scroll to bottom" aria-label="Scroll to bottom">⬇️</button>
+</div>
+
 <script>
-  // Simple copy-to-clipboard for credential pills
+  // Copy-to-clipboard for credential pills (event delegation)
   document.addEventListener('click', function(e){
     const btn = e.target.closest('[data-copy]');
     if(!btn) return;
     const txt = btn.getAttribute('data-copy') || '';
     if(!txt) return;
-    navigator.clipboard.writeText(txt).then(()=>{
+    (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(()=>{
+      const old = btn.textContent;
       btn.textContent = '✅';
-      setTimeout(()=>btn.textContent='📋', 900);
+      setTimeout(()=>btn.textContent = old || '📋', 900);
     }).catch(()=>{ /* ignore */ });
   });
+
+  // Client-side quick filter across all tables
+  const qf = document.getElementById('quickFilter');
+  const clearBtn = document.getElementById('clearQuick');
+  function norm(s){ return (s||'').toString().toLowerCase().replace(/\s+/g,' ').trim(); }
+  function applyFilter(){
+    const needle = norm(qf.value);
+    document.querySelectorAll('.js-filter-table tbody tr').forEach(tr=>{
+      if(!needle){ tr.style.display=''; return; }
+      const hay = norm(tr.innerText);
+      tr.style.display = hay.includes(needle) ? '' : 'none';
+    });
+  }
+  if(qf){
+    qf.addEventListener('input', applyFilter);
+    clearBtn && clearBtn.addEventListener('click', ()=>{ qf.value=''; applyFilter(); qf.focus(); });
+  }
+
+  // Scroll helpers
+  const topBtn = document.getElementById('scrollTopBtn');
+  const botBtn = document.getElementById('scrollBottomBtn');
+  topBtn && topBtn.addEventListener('click', ()=> window.scrollTo({top:0, behavior:'smooth'}));
+  botBtn && botBtn.addEventListener('click', ()=> window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}));
 </script>
 
 {% endblock %}

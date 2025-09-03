@@ -522,6 +522,11 @@ def deposits_list():
         users_map = {u.id: u for u in User.query.filter(User.id.in_(user_ids)).all()} if user_ids else {}
         refcodes = _refcodes_for_user_ids(user_ids)
 
+        # NEW: map game -> backend URL so template can show "Open Backend"
+        game_ids = list({d.game_id for d in items if d.game_id})
+        games_map = {g.id: g for g in Game.query.filter(Game.id.in_(game_ids)).all()} if game_ids else {}
+        backend_urls = {gid: _backend_url_for(g) for gid, g in games_map.items()}
+
         return render_template(
             "employee_deposits.html",
             page_title="Deposits",
@@ -531,6 +536,9 @@ def deposits_list():
             status=status,
             q=q,
             settings=settings,
+            # NEW:
+            games=games_map,
+            backend_urls=backend_urls,
         )
 
     # ---- Legacy split view (no filter/query) ----
@@ -592,6 +600,11 @@ def deposits_list():
     pending_rows = build_rows(pending)
     recent_rows  = build_rows(recent)
 
+    # NEW: provide backend URLs for legacy view too
+    legacy_game_ids = list({d.game_id for d in (pending + recent) if d.game_id})
+    games_map = {g.id: g for g in Game.query.filter(Game.id.in_(legacy_game_ids)).all()} if legacy_game_ids else {}
+    backend_urls = {gid: _backend_url_for(g) for gid, g in games_map.items()}
+
     return render_template(
         "employee_deposits.html",
         page_title="Deposits",
@@ -604,8 +617,10 @@ def deposits_list():
         settings=settings,
         pending_rows=pending_rows,
         recent_rows=recent_rows,
+        # NEW:
+        games=games_map,
+        backend_urls=backend_urls,
     )
-
 
 # New: Deposit detail page
 @employee_bp.get("/deposits/<int:dep_id>", endpoint="deposit_detail")
