@@ -1,11 +1,8 @@
-# models.py
 from datetime import datetime, timedelta
 import secrets
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-
-# NEW: event utilities for auto-fulfill
 from sqlalchemy import event
 from sqlalchemy.orm import object_session
 
@@ -20,7 +17,7 @@ class User(db.Model, UserMixin):
     # profile
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(255), unique=True, nullable=False, index=True)
-    mobile = db.Column(db.String(24), nullable=True, index=True)  # E.164 (e.g. +15551234567)
+    mobile = db.Column(db.String(24), nullable=True, index=True)  # E.164
 
     # auth
     password_hash = db.Column(db.String(255), nullable=False)
@@ -31,11 +28,10 @@ class User(db.Model, UserMixin):
     email_verified_at = db.Column(db.DateTime, nullable=True)
 
     # one-time UX flags
-    promo_seen = db.Column(db.Boolean, default=False, index=True)  # show promos once after first login
+    promo_seen = db.Column(db.Boolean, default=False, index=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # helpers
     def set_password(self, pw: str):
         self.password_hash = generate_password_hash(pw)
 
@@ -48,18 +44,12 @@ class User(db.Model, UserMixin):
 
 # ========================= One-time tokens =========================
 class EmailToken(db.Model):
-    """
-    Email verification token. When the user clicks the link we:
-      - look up by token
-      - mark the owning user's email_verified True
-      - delete the token (or let it expire)
-    """
     __tablename__ = "email_tokens"
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     token = db.Column(db.String(64), unique=True, nullable=False, index=True)
-    purpose = db.Column(db.String(16), default="verify", index=True)  # "verify"
+    purpose = db.Column(db.String(16), default="verify", index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     expires_at = db.Column(db.DateTime, nullable=False, index=True)
 
@@ -77,12 +67,6 @@ class EmailToken(db.Model):
 
 
 class PasswordResetToken(db.Model):
-    """
-    Password reset token. Flow:
-      - issue for user_id
-      - email link: /reset?token=...
-      - on submit, set new password + delete/mark used tokens
-    """
     __tablename__ = "password_reset_tokens"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -108,7 +92,7 @@ class PasswordResetToken(db.Model):
 class PaymentSettings(db.Model):
     __tablename__ = "payment_settings"
 
-    id = db.Column(db.Integer, primary_key=True)  # single row (id=1)
+    id = db.Column(db.Integer, primary_key=True)
 
     # deposit methods
     crypto_wallet_text = db.Column(db.String(255), default="USDT-TRC20: YOUR_ADDRESS")
@@ -116,29 +100,32 @@ class PaymentSettings(db.Model):
     chime_handle = db.Column(db.String(255), default="@your-chime")
     chime_qr_url = db.Column(db.String(500), default="")
 
-    # NEW: optional direct pay links (for "Pay now" buttons)
+    # direct pay links
     crypto_pay_url = db.Column(db.String(500), default="")
     chime_pay_url  = db.Column(db.String(500), default="")
 
-    # promo math / withdrawal limits
+    # Cash App
+    cashapp_handle  = db.Column(db.String(255), default="$yourcashtag")
+    cashapp_qr_url  = db.Column(db.String(500), default="")
+    cashapp_pay_url = db.Column(db.String(500), default="")
+
+    # promos / limits
     bonus_percent = db.Column(db.Integer, default=0)
     min_redeem = db.Column(db.Integer, default=0)
     max_redeem = db.Column(db.Integer, default=0)
 
-    # social/contact links used by the left rail
+    # social/contact
     whatsapp_url = db.Column(db.String(500), default="")
     telegram_url = db.Column(db.String(500), default="")
     facebook_url = db.Column(db.String(500), default="")
     instagram_url = db.Column(db.String(500), default="")
 
-    # one-time login promos (admin editable)
+    # promos
     promo_bonus_line    = db.Column(db.String(300), default="🔥 Today only: +10% bonus on YOLO!")
     promo_referral_line = db.Column(db.String(300), default="🤝 Refer a friend, get +5% bonus!")
     promo_service_line  = db.Column(db.String(300), default="🕐 We’re 24/7 and always here to help.")
     promo_trust_line    = db.Column(db.String(300), default="✅ 100% legit & secure.")
-
-    # legacy helper; safe to ignore elsewhere
-    promo_text = db.Column(db.String(200), default="")
+    promo_text          = db.Column(db.String(200), default="")
 
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -152,7 +139,7 @@ class Game(db.Model):
     description = db.Column(db.String(300), default="")
     icon_url = db.Column(db.String(500), default="")
     download_url = db.Column(db.String(500), nullable=False)
-    backend_url = db.Column(db.String(500), nullable=True)  # merchant/staff URL (optional)
+    backend_url = db.Column(db.String(500), nullable=True)
     is_active = db.Column(db.Boolean, default=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -163,7 +150,7 @@ class PlayerBalance(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), unique=True, nullable=False, index=True)
-    balance = db.Column(db.Integer, default=0)  # store in smallest unit
+    balance = db.Column(db.Integer, default=0)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -175,14 +162,22 @@ class DepositRequest(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     game_id = db.Column(db.Integer, db.ForeignKey("games.id"), nullable=True, index=True)
     amount = db.Column(db.Integer, nullable=False)
-    method = db.Column(db.String(20), nullable=False)  # 'CRYPTO' | 'CHIME'
+    method = db.Column(db.String(20), nullable=False, default="CRYPTO", index=True)  # CRYPTO|CHIME|CASHAPP
     proof_url = db.Column(db.String(500), default="")
-    status = db.Column(db.String(20), default="PENDING", index=True)  # PENDING | RECEIVED | LOADED | REJECTED
+    status = db.Column(db.String(20), default="PENDING", index=True)  # PENDING|RECEIVED|LOADED|REJECTED
     note = db.Column(db.String(300), default="")
     received_at = db.Column(db.DateTime, nullable=True)
     loaded_at = db.Column(db.DateTime, nullable=True)
-    loaded_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)  # employee/admin id
-    credited_amount = db.Column(db.Integer, default=0)  # amount + bonus actually credited
+    loaded_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    credited_amount = db.Column(db.Integer, default=0)
+
+    # SafePay / automation
+    provider = db.Column(db.String(32), default="safepay")
+    provider_order_id = db.Column(db.String(128))
+    pay_url = db.Column(db.Text)
+    backend_url = db.Column(db.Text)
+    meta = db.Column(db.JSON, default=dict)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -212,14 +207,14 @@ class GameAccountRequest(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     game_id = db.Column(db.Integer, db.ForeignKey("games.id"), nullable=False, index=True)
 
-    # PENDING | IN_PROGRESS | PROVIDED | APPROVED | REJECTED (we allow APPROVED for dashboards)
+    # PENDING | IN_PROGRESS | PROVIDED | APPROVED | REJECTED
     status = db.Column(db.String(20), default="PENDING", index=True)
 
     note = db.Column(db.String(300), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # NEW: who is handling / who approved (needed for admin dashboard)
+    # who is handling / who approved
     handled_by     = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     approved_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     approved_at    = db.Column(db.DateTime, nullable=True)
@@ -231,7 +226,7 @@ class GameAccount(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
 
-    # make request_id nullable=True for legacy rows; views handle presence if available
+    # request_id nullable for legacy rows
     request_id = db.Column(db.Integer, db.ForeignKey("game_account_requests.id"), nullable=True, index=True)
 
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
@@ -241,19 +236,17 @@ class GameAccount(db.Model):
     account_password = db.Column(db.String(120), nullable=False)
     extra = db.Column(db.String(300), default="")
 
-    # who issued this login (so admin dashboard can show "Issued By")
     issued_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     issued_at    = db.Column(db.DateTime, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
-# ========================= Ready Accounts Pool (NEW) =========================
+# ========================= Ready Accounts Pool =========================
 class ReadyAccount(db.Model):
     """
-    Employees/Admins can 'stock' ready-to-use credentials per game.
-    When a player requests access, the system can instantly claim one,
-    create a GameAccount for the player, and mark the pool row as claimed.
+    Employees/Admins can stock ready-to-use credentials per game.
+    When a player requests access, the system can instantly claim one.
     """
     __tablename__ = "ready_accounts"
 
@@ -279,6 +272,61 @@ class ReadyAccount(db.Model):
 ReadyAccountPool = ReadyAccount
 
 
+# ========================= External Accounts (NEW) =========================
+class ExternalAccount(db.Model):
+    """
+    Maps our users to external vendor accounts (e.g., GameVault).
+    Safe to use with automation jobs to find the right external ID/username.
+    """
+    __tablename__ = "external_accounts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+
+    # e.g., 'gamevault', 'apex', etc.
+    vendor = db.Column(db.String(32), nullable=False, index=True)
+
+    # Values as shown in the vendor's panel
+    vendor_user_id = db.Column(db.String(64), nullable=True, index=True)     # numeric/string ID from vendor
+    vendor_username = db.Column(db.String(120), nullable=True, index=True)   # username created at vendor
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("vendor", "vendor_user_id", name="uq_vendor_and_vendor_user_id"),
+    )
+
+
+def get_or_create_external_account(user_id: int, vendor: str,
+                                   vendor_user_id: str | None = None,
+                                   vendor_username: str | None = None) -> ExternalAccount:
+    """
+    Convenience helper: fetch if exists; otherwise create a new mapping.
+    Does NOT commit — caller should commit the session.
+    """
+    rec = (
+        ExternalAccount.query
+        .filter(ExternalAccount.user_id == user_id, ExternalAccount.vendor == vendor)
+        .first()
+    )
+    if rec:
+        if vendor_user_id and not rec.vendor_user_id:
+            rec.vendor_user_id = vendor_user_id
+        if vendor_username and not rec.vendor_username:
+            rec.vendor_username = vendor_username
+        return rec
+
+    rec = ExternalAccount(
+        user_id=user_id,
+        vendor=vendor,
+        vendor_user_id=vendor_user_id,
+        vendor_username=vendor_username,
+        created_at=datetime.utcnow(),
+    )
+    db.session.add(rec)
+    return rec
+
+
 # ========================= Notifications =========================
 class Notification(db.Model):
     __tablename__ = "notifications"
@@ -293,8 +341,7 @@ class Notification(db.Model):
 def notify(user_id: int, message: str):
     """
     Create a notification unless an identical unread one already exists
-    very recently (5 minutes). This prevents accidental duplicates from
-    double submits or multiple code paths.
+    very recently (5 minutes). This prevents accidental duplicates.
     """
     try:
         recent = (
@@ -306,9 +353,8 @@ def notify(user_id: int, message: str):
             .first()
         )
         if recent and (datetime.utcnow() - (recent.created_at or datetime.utcnow())) < timedelta(minutes=5):
-            return  # skip duplicate
+            return
     except Exception:
-        # if anything goes wrong with the check, still try to create the note
         db.session.rollback()
 
     n = Notification(user_id=user_id, message=message, is_read=False, created_at=datetime.utcnow())
@@ -321,10 +367,10 @@ class ChatMessage(db.Model):
     __tablename__ = "chat_messages"
 
     id = db.Column(db.Integer, primary_key=True)
-    room = db.Column(db.String(64), default="global", index=True)   # "global", "game-12", etc.
+    room = db.Column(db.String(64), default="global", index=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
-    user_role = db.Column(db.String(20))                             # PLAYER / EMPLOYEE / ADMIN / GUEST
-    user_name = db.Column(db.String(120))                            # snapshot for quick rendering
+    user_role = db.Column(db.String(20))
+    user_name = db.Column(db.String(120))
     message = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
@@ -340,13 +386,13 @@ class ChatMessage(db.Model):
         }
 
 
-# ========================= Private DM Chat (player ↔ employee) =========================
+# ========================= Private DM Chat =========================
 class DMThread(db.Model):
     __tablename__ = "dm_threads"
 
     id = db.Column(db.Integer, primary_key=True)
     player_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
-    employee_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)  # assigned staff
+    employee_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     status = db.Column(db.String(16), default="OPEN", index=True)  # OPEN | CLOSED
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -377,7 +423,7 @@ class DMMessage(db.Model):
         }
 
 
-# ========================= Referrals (NEW) =========================
+# ========================= Referrals =========================
 class ReferralCode(db.Model):
     __tablename__ = "referral_codes"
 
@@ -389,10 +435,6 @@ class ReferralCode(db.Model):
 
 
 def _generate_ref_code_base(name: str) -> str:
-    """
-    Take first two alphabetic characters from the name (uppercased).
-    Fallback to 'PL' if not available or too short.
-    """
     letters = "".join([c for c in (name or "") if c.isalpha()]).upper()
     base = (letters[:2] or "PL")
     if len(base) < 2:
@@ -401,12 +443,6 @@ def _generate_ref_code_base(name: str) -> str:
 
 
 def get_or_create_referral_for_user(user_id: int) -> ReferralCode:
-    """
-    Ensure a user has a unique 6-char referral code:
-      - 2 letters from name (uppercased)
-      - 4 digit random number
-    Returns the ReferralCode row.
-    """
     rec = ReferralCode.query.filter_by(user_id=user_id).first()
     if rec:
         return rec
@@ -414,7 +450,6 @@ def get_or_create_referral_for_user(user_id: int) -> ReferralCode:
     user = db.session.get(User, user_id)
     base = _generate_ref_code_base(user.name if user else "")
 
-    # ensure uniqueness
     while True:
         suffix = f"{secrets.randbelow(10000):04d}"
         code = f"{base}{suffix}"
@@ -427,37 +462,26 @@ def get_or_create_referral_for_user(user_id: int) -> ReferralCode:
     return rec
 
 
-# =============== AUTO-FULFILL GAME REQUESTS ON INSERT (NO EMPLOYEE CLICK) ===============
+# =============== AUTO-FULFILL GAME REQUESTS ON INSERT ===============
 @event.listens_for(GameAccountRequest, "after_insert")
 def _autofulfill_game_request_on_insert(mapper, connection, req: GameAccountRequest):
-    """
-    Instantly fulfill a new GameAccountRequest if a ReadyAccount is available for the same game.
-    Runs inside the same transaction/flush that inserted the request.
-    - Claims the oldest available ReadyAccount
-    - Creates/updates player's GameAccount with credentials
-    - Marks request APPROVED (+ approved_at)
-    - Adds a Notification row (no external commit)
-    """
     try:
         sess = object_session(req)
         if sess is None or not req or not req.game_id or not req.user_id:
             return
 
-        # Oldest available ready account for this game
         q = (
             sess.query(ReadyAccount)
             .filter(ReadyAccount.game_id == req.game_id)
             .order_by(ReadyAccount.created_at.asc())
         )
-        # prefer unclaimed if the column exists
         if hasattr(ReadyAccount, "is_claimed"):
             q = q.filter(ReadyAccount.is_claimed == False)  # noqa: E712
 
         ra = q.first()
         if not ra:
-            return  # nothing available; leave request pending
+            return
 
-        # Ensure or create GameAccount
         acc = (
             sess.query(GameAccount)
             .filter(GameAccount.user_id == req.user_id, GameAccount.game_id == req.game_id)
@@ -471,41 +495,19 @@ def _autofulfill_game_request_on_insert(mapper, connection, req: GameAccountRequ
             )
             sess.add(acc)
 
-        # Credentials
-        username_val = getattr(ra, "username", "")
-        password_val = getattr(ra, "password", "")
-        if hasattr(acc, "account_username"):
-            acc.account_username = username_val
-        elif hasattr(acc, "username"):
-            acc.username = username_val
-        elif hasattr(acc, "login"):
-            acc.login = username_val
-
-        if hasattr(acc, "account_password"):
-            acc.account_password = password_val
-        elif hasattr(acc, "password"):
-            acc.password = password_val
-        elif hasattr(acc, "passcode"):
-            acc.passcode = password_val
-
-        note_val = getattr(ra, "note", "") or ""
-        if hasattr(acc, "extra"):
-            acc.extra = note_val
-        elif hasattr(acc, "note"):
-            acc.note = note_val
+        acc.account_username = getattr(ra, "username", "")
+        acc.account_password = getattr(ra, "password", "")
+        acc.extra = (getattr(ra, "note", "") or "")
 
         if hasattr(acc, "request_id"):
             acc.request_id = req.id
         if hasattr(acc, "issued_at"):
             acc.issued_at = datetime.utcnow()
-        # issued_by_id is unknown here (no current_user in model layer)
 
-        # Approve the request
         req.status = "APPROVED"
         if hasattr(req, "approved_at"):
             req.approved_at = datetime.utcnow()
 
-        # Claim or consume the ready account entry
         if hasattr(ra, "is_claimed"):
             ra.is_claimed = True
             if hasattr(ra, "claimed_by"):
@@ -513,10 +515,8 @@ def _autofulfill_game_request_on_insert(mapper, connection, req: GameAccountRequ
             if hasattr(ra, "claimed_at"):
                 ra.claimed_at = datetime.utcnow()
         else:
-            # Back-compat: if no "is_claimed" field exists, delete the row
             sess.delete(ra)
 
-        # Enqueue notification (avoid notify() which commits)
         game = sess.get(Game, req.game_id)
         game_name = game.name if game else f"Game #{req.game_id}"
         sess.add(Notification(
@@ -525,8 +525,11 @@ def _autofulfill_game_request_on_insert(mapper, connection, req: GameAccountRequ
             is_read=False,
             created_at=datetime.utcnow(),
         ))
-
-        # No explicit commit; runs within current flush/transaction
     except Exception:
-        # Make sure a failure here never breaks the original insert
+        # never block the original insert
         pass
+
+
+# ========================= Back-compat alias =========================
+# Some blueprints may still import `Deposit` from models.
+Deposit = DepositRequest

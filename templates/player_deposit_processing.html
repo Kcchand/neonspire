@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Preparing your payment…</div>
+    </div>
+
+    <div class="panel" style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px">
+      <div id="statusLine" class="muted">Creating your Cash App invoice…</div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <p>Your payment has been processed. Please wait while we redirect you to your payment page.</p>
+      <p><em>Note: Do not close this window.</em></p>
+      <p id="errBox" style="display:none;color:#ef4444;margin-top:12px"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Direct path avoids template-time url_for to prevent BuildError
+  const statusUrl = "/player/deposit/{{ deposit.id }}/status.json";
+  const errBox = document.getElementById("errBox");
+  const statusLine = document.getElementById("statusLine");
+
+  function showError(msg) {
+    if (!msg) msg = "Unable to prepare payment. Please try again.";
+    errBox.textContent = msg;
+    errBox.style.display = "block";
+    if (statusLine) statusLine.textContent = "Payment preparation failed.";
+  }
+
+  // If backend already has a pay_url, jump immediately.
+  {% if deposit.pay_url %}
+  try {
+    window.location = {{ deposit.pay_url|tojson }};
+    return;
+  } catch (_) {}
+  {% endif %}
+
+  async function poll() {
+    try {
+      const res = await fetch(statusUrl, { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+
+      // Redirect as soon as a pay_url is available
+      if (data.ok && data.pay_url) {
+        window.location = data.pay_url;
+        return;
+      }
+
+      if (data.ok && (String(data.status).toLowerCase() === "failed" || String(data.status).toLowerCase() === "canceled")) {
+        showError(data.err || "");
+        return;
+      }
+
+      // Update small status hint
+      if (statusLine && data.status) {
+        const s = String(data.status).toUpperCase();
+        if (s.includes("PROCESS")) statusLine.textContent = "Creating your Cash App invoice…";
+      }
+    } catch (e) {
+      // transient error; keep polling
+    }
+    setTimeout(poll, 1200);
+  }
+
+  poll();
+})();
+</script>
+{% endblock %}

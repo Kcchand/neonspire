@@ -103,12 +103,27 @@ document.addEventListener("DOMContentLoaded", () => {
 {% endblock %}
 
 {% block content %}
+<style>
+  /* ====== Credits pill near the game icon ====== */
+  .game-card .game-media{position:relative}
+  .gv-balance-pill{
+    position:absolute; left:14px; top:14px;
+    padding:5px 12px; border-radius:999px;
+    font-size:12px; font-weight:800; letter-spacing:.2px;
+    color:#fff; background:linear-gradient(135deg,#1ad1a5,#16c2ff);
+    box-shadow:0 10px 26px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.06) inset;
+    backdrop-filter:saturate(120%) blur(2px);
+    pointer-events:none; user-select:none;
+  }
+  @media (max-width:520px){
+    .gv-balance-pill{font-size:11px; padding:4px 10px; left:10px; top:10px}
+  }
+</style>
+
 <div class="shell grid-page" style="margin-top:14px">
 
   <!-- Left rail -->
   <aside class="rail">
-
-    <!-- Add Funds (kept as-is; visible on desktop & mobile) -->
     <div class="rail-card">
       <div class="rail-title">Add Funds</div>
       {% if current_user.is_authenticated %}
@@ -124,7 +139,6 @@ document.addEventListener("DOMContentLoaded", () => {
       {% endif %}
     </div>
 
-    <!-- Withdraw (kept as-is; visible on desktop & mobile) -->
     <div class="rail-card">
       <div class="rail-title">Withdraw</div>
       {% if current_user.is_authenticated %}
@@ -138,7 +152,6 @@ document.addEventListener("DOMContentLoaded", () => {
       {% endif %}
     </div>
 
-    <!-- Contact Us (HIDE on mobile; we will render again below games) -->
     <div class="rail-card hide-mobile" id="contact">
       <div class="rail-title">Contact Us</div>
       {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/+12342795662') %}
@@ -154,11 +167,9 @@ document.addEventListener("DOMContentLoaded", () => {
       <div class="rail-sub" style="margin-top:8px">We’re available 24/7.</div>
     </div>
 
-    {# Referral (HIDE on mobile; we will render again below games) #}
     {% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
     <div class="rail-card hide-mobile">
       <div class="rail-title">Referral Program</div>
-      <!-- CHANGED: use a button + class, not an <a id> -->
       <button type="button" class="btn btn-wide js-ref-btn">Get My Link</button>
     </div>
     {% endif %}
@@ -166,8 +177,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   <!-- Main column -->
   <section>
-
-    <!-- Trending -->
     <div class="panel">
       <div class="panel-head">
         <div class="h3">Today’s Trending</div>
@@ -185,7 +194,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
     </div>
 
-    <!-- Games -->
     <div class="panel">
       <div class="panel-head">
         <div class="h3">Games</div>
@@ -203,7 +211,19 @@ document.addEventListener("DOMContentLoaded", () => {
               {% else %}
                 <div class="media-fallback">🎮</div>
               {% endif %}
+
+              {# ---- Credits pill (uses gv_balances from app.py) ---- #}
+              {% set bal = (gv_balances.get(g.id, 0) if gv_balances is defined else 0) | int %}
+              {# If you want ONLY GameVault to show, uncomment next line: #}
+              {# {% set show_for_this_game = (g.name or '')|lower == 'gamevault' %} #}
+              {% set show_for_this_game = True %}
+              {% if current_user.is_authenticated and show_for_this_game and bal > 0 %}
+                <div class="gv-balance-pill" aria-label="Game credits">
+                  Credits: {{ bal }}
+                </div>
+              {% endif %}
             </div>
+
             <div class="game-body">
               <div class="game-title" title="{{ g.name }}">{{ g.name }}</div>
               <div class="game-sub" title="{{ g.description or '' }}">{{ g.description or "Hottest game on the market" }}</div>
@@ -255,7 +275,6 @@ document.addEventListener("DOMContentLoaded", () => {
       {% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
       <div class="panel">
         <div class="rail-title">Referral Program</div>
-        <!-- CHANGED: use a button + class, not an <a id> -->
         <button type="button" class="btn btn-wide js-ref-btn">Get My Link</button>
       </div>
       {% endif %}
@@ -329,7 +348,7 @@ document.addEventListener('DOMContentLoaded', function () {
 <script>
 (function(){
   const modal   = document.getElementById('refModal');
-  const triggers = document.querySelectorAll('.js-ref-btn'); // <-- bind to ALL triggers, desktop + mobile
+  const triggers = document.querySelectorAll('.js-ref-btn');
   if(!modal || !triggers.length) return;
 
   const closeBtn   = document.getElementById('refCloseBtn');
@@ -364,7 +383,6 @@ document.addEventListener('DOMContentLoaded', function () {
     }catch(e){ setState('error'); }
   }
 
-  // bind to ALL visible buttons
   triggers.forEach(btn => {
     btn.addEventListener('click', (e)=>{
       e.preventDefault();

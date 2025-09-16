@@ -1,202 +1,158 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="shell">
-  <div class="panel">
+
+  <div class="panel" style="margin-bottom:14px">
     <div class="panel-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-      <div class="h3">Request Withdrawal</div>
-      {% if settings %}
-        <div class="muted">Min: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>
-      {% endif %}
+      <div class="h3">Withdrawals</div>
+      <div class="muted">
+        Pending: <strong>{{ pending|length }}</strong> • Recent: <strong>{{ recent|length }}</strong>
+      </div>
     </div>
-
-    <form method="post" action="{{ url_for('playerbp.withdraw_post') }}" id="withdrawForm">
-      {% if preselect_game_id %}
-        <input type="hidden" name="game_id" value="{{ preselect_game_id }}">
-      {% elif request.args.get('game_id') %}
-        <input type="hidden" name="game_id" value="{{ request.args.get('game_id')|int }}">
-      {% endif %}
-
-      <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <!-- Game (read-only if prefilled) -->
-        <div>
-          <label class="label">Game (optional)</label>
-          <input class="input" value="{{ (game.name if game else '') or request.args.get('game_name','') }}" placeholder="e.g., Ultra Panda" readonly>
-        </div>
-
-        <!-- Method -->
-        <div>
-          <label class="label">Payout Method</label>
-          <div class="seg" role="tablist" aria-label="Payout method" style="display:flex;gap:8px">
-            {# keeps same names backend expects: 'CRYPTO' or 'CHIME' #}
-            {% set m = (request.args.get('method') or 'CHIME')|upper %}
-            <input type="hidden" name="method" id="methodInput" value="{{ 'CRYPTO' if m=='CRYPTO' else 'CHIME' }}">
-            <button type="button" class="btn btn-ghost" data-method="CRYPTO" id="btnCrypto">Crypto</button>
-            <button type="button" class="btn btn-ghost" data-method="CHIME" id="btnChime">Chime</button>
-          </div>
-        </div>
-
-        <!-- Destination -->
-        <div style="grid-column:1 / -1">
-          <label class="label">Destination (wallet / handle)</label>
-
-          <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center">
-            <input class="input" id="destInput" name="address"
-                   placeholder="e.g., BTC wallet address or @chimehandle"
-                   autocomplete="off" inputmode="text" spellcheck="false">
-            <button class="btn" type="button" id="btnUseLast" style="display:none">Use last</button>
-            <button class="btn" type="button" id="btnCopy">Copy</button>
-            <button class="btn btn-primary" type="button" id="btnRequestApp">Request from App</button>
-          </div>
-
-          <div class="muted" id="destHint" style="margin-top:6px">
-            Enter your BTC/USDT wallet address (Crypto) or @username (Chime).
-          </div>
-        </div>
-
-        <!-- Amounts -->
-        <div>
-          <label class="label">Total Amount</label>
-          <input class="input" type="number" name="total_amount" id="totalAmount" placeholder="e.g., 200" min="0" step="1">
-        </div>
-
-        <div>
-          <label class="label">Keep in Game</label>
-          <input class="input" type="number" name="keep_amount" id="keepAmount" placeholder="e.g., 50" min="0" step="1">
-        </div>
-
-        <div>
-          <label class="label">Tip for Employee</label>
-          <input class="input" type="number" name="tip_amount" id="tipAmount" placeholder="e.g., 10" min="0" step="1">
-        </div>
-
-        <div>
-          <label class="label">Cash Out (auto)</label>
-          <input class="input" type="number" name="amount" id="cashOut" value="0" readonly>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end">
-        <a class="btn btn-ghost" href="{{ url_for('index') }}">Back</a>
-        <button class="btn btn-primary" type="submit" id="submitBtn">Submit Withdrawal</button>
-      </div>
-    </form>
   </div>
+
+  {# ----------------------- PENDING ----------------------- #}
+  <div class="panel">
+    <div class="h4" style="margin-bottom:10px">Pending</div>
+
+    {% if pending %}
+      <div class="table">
+        <div class="t-head">
+          <div>ID</div>
+          <div>Player</div>
+          <div>Game</div>
+          <div>Method</div>
+          <div>Destination</div>
+          <div>Amount</div>
+          <div>Wallet</div>
+          <div>Requested</div>
+          <div>Actions</div>
+        </div>
+
+        {% for w in pending %}
+          {% set user = users.get(w.user_id) %}
+          {% set game = games.get(w.game_id) %}
+          {% set wallet = wallets.get(w.user_id) %}
+          <div class="t-row">
+            <div class="mono">#{{ w.id }}</div>
+
+            <div>
+              <div class="strong">{{ (user.name or user.email) if user else ('User #' ~ w.user_id) }}</div>
+              {% if user and user.email %}
+                <div class="muted mono" style="font-size:12px">{{ user.email }}</div>
+              {% endif %}
+            </div>
+
+            <div>{{ game.name if game else '—' }}</div>
+
+            <div>
+              <span class="badge">{{ (w.method or 'MANUAL')|upper }}</span>
+              {% if w.status and w.status != 'PENDING' %}
+                <span class="badge" style="margin-left:6px">{{ w.status }}</span>
+              {% endif %}
+            </div>
+
+            <div class="mono" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              {{ w.address or w.handle or w.destination or '—' }}
+            </div>
+
+            <div class="mono"><strong>{{ w.amount or 0 }}</strong></div>
+            <div class="mono">{{ wallet.balance if wallet else 0 }}</div>
+            <div class="mono">{{ w.created_at.strftime('%Y-%m-%d %H:%M') if w.created_at else '—' }}</div>
+
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <form method="post" action="{{ url_for('employeebp.withdrawals_redeem', wd_id=w.id) }}"
+                    onsubmit="return rowConfirm(this, 'Redeem on GameVault now?');">
+                <button class="btn" type="submit">Redeem</button>
+              </form>
+
+              <form method="post" action="{{ url_for('employeebp.withdrawals_paid', wd_id=w.id) }}"
+                    onsubmit="return rowConfirm(this, 'Mark as PAID and deduct wallet?');">
+                <input class="input" type="number" name="tip_amount" placeholder="Tip"
+                       style="width:84px" min="0" step="1">
+                <button class="btn btn-primary" type="submit">Mark Paid</button>
+              </form>
+
+              <form method="post" action="{{ url_for('employeebp.withdrawals_reject', wd_id=w.id) }}"
+                    onsubmit="return rowConfirm(this, 'Reject this withdrawal?');">
+                <button class="btn btn-ghost" type="submit">Reject</button>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty">No pending withdrawals.</div>
+    {% endif %}
+  </div>
+
+  {# ----------------------- RECENT ----------------------- #}
+  <div class="panel" style="margin-top:14px">
+    <div class="h4" style="margin-bottom:10px">Recent (last 30)</div>
+
+    {% if recent %}
+      <div class="table">
+        <div class="t-head">
+          <div>ID</div>
+          <div>Player</div>
+          <div>Game</div>
+          <div>Method</div>
+          <div>Destination</div>
+          <div>Amount</div>
+          <div>Status</div>
+          <div>Updated</div>
+        </div>
+
+        {% for w in recent %}
+          {% set user = users.get(w.user_id) %}
+          {% set game = games.get(w.game_id) %}
+          <div class="t-row">
+            <div class="mono">#{{ w.id }}</div>
+            <div>
+              <div class="strong">{{ (user.name or user.email) if user else ('User #' ~ w.user_id) }}</div>
+              {% if user and user.email %}
+                <div class="muted mono" style="font-size:12px">{{ user.email }}</div>
+              {% endif %}
+            </div>
+            <div>{{ game.name if game else '—' }}</div>
+            <div><span class="badge">{{ (w.method or 'MANUAL')|upper }}</span></div>
+            <div class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              {{ w.address or w.handle or w.destination or '—' }}
+            </div>
+            <div class="mono"><strong>{{ w.amount or 0 }}</strong></div>
+            <div>
+              {% if w.status == 'PAID' %}
+                <span class="badge success">PAID</span>
+              {% elif w.status == 'REJECTED' %}
+                <span class="badge danger">REJECTED</span>
+              {% elif w.status == 'APPROVED' %}
+                <span class="badge">APPROVED</span>
+              {% else %}
+                <span class="badge">{{ w.status or '—' }}</span>
+              {% endif %}
+            </div>
+            <div class="mono">
+              {% if w.paid_at %}{{ w.paid_at.strftime('%Y-%m-%d %H:%M') }}
+              {% else %}{{ w.updated_at.strftime('%Y-%m-%d %H:%M') if w.updated_at else (w.created_at.strftime('%Y-%m-%d %H:%M') if w.created_at else '—') }}
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty">No recent activity.</div>
+    {% endif %}
+  </div>
+
 </div>
 
 <script>
-/* =============== Smart Withdraw UX =============== */
-(function(){
-  const methodInput = document.getElementById('methodInput');
-  const btnCrypto   = document.getElementById('btnCrypto');
-  const btnChime    = document.getElementById('btnChime');
-  const destInput   = document.getElementById('destInput');
-  const btnUseLast  = document.getElementById('btnUseLast');
-  const btnCopy     = document.getElementById('btnCopy');
-  const btnReqApp   = document.getElementById('btnRequestApp');
-  const destHint    = document.getElementById('destHint');
-
-  const totalEl = document.getElementById('totalAmount');
-  const keepEl  = document.getElementById('keepAmount');
-  const tipEl   = document.getElementById('tipAmount');
-  const cashOut = document.getElementById('cashOut');
-
-  const LS_KEYS = {
-    CRYPTO: 'payout.last.crypto',
-    CHIME:  'payout.last.chime'
-  };
-
-  function setSegActive() {
-    [btnCrypto, btnChime].forEach(b=>{
-      const active = b.dataset.method === methodInput.value;
-      b.classList.toggle('btn-primary', active);
-      b.classList.toggle('btn-ghost', !active);
-      b.setAttribute('aria-pressed', active ? 'true' : 'false');
-    });
-  }
-
-  function applyMethodUI() {
-    const m = methodInput.value;
-    if (m === 'CRYPTO') {
-      destInput.placeholder = 'e.g., BTC/USDT wallet address';
-      destHint.textContent  = 'Paste your crypto wallet address (BTC/USDT). We will pay to this address.';
-    } else {
-      destInput.placeholder = 'e.g., @yourchimehandle';
-      destHint.textContent  = 'Enter your @Chime handle (Pay Anyone). We will pay to this handle.';
-    }
-    // show/hide "Use last"
-    const last = localStorage.getItem(LS_KEYS[m]);
-    btnUseLast.style.display = last ? '' : 'none';
-  }
-
-  function setMethod(m){
-    methodInput.value = (m === 'CRYPTO') ? 'CRYPTO' : 'CHIME';
-    setSegActive();
-    applyMethodUI();
-  }
-
-  btnCrypto.addEventListener('click', ()=> setMethod('CRYPTO'));
-  btnChime .addEventListener('click', ()=> setMethod('CHIME'));
-
-  // Copy current destination
-  btnCopy.addEventListener('click', async ()=>{
-    try{
-      await navigator.clipboard.writeText(destInput.value || '');
-      btnCopy.textContent = 'Copied!';
-      setTimeout(()=>btnCopy.textContent='Copy', 1200);
-    }catch(_){
-      alert('Copied to clipboard.');
-    }
-  });
-
-  // Use last saved address/handle
-  btnUseLast.addEventListener('click', ()=>{
-    const m = methodInput.value;
-    const last = localStorage.getItem(LS_KEYS[m]) || '';
-    if (last) { destInput.value = last; destInput.focus(); }
-  });
-
-  // Save entered destination on change
-  destInput.addEventListener('change', ()=>{
-    const m = methodInput.value;
-    const v = (destInput.value || '').trim();
-    if (v) {
-      localStorage.setItem(LS_KEYS[m], v);
-      btnUseLast.style.display = '';
-    }
-  });
-
-  // Deep-link / app request (best-effort)
-  btnReqApp.addEventListener('click', ()=>{
-    const m = methodInput.value;
-    // We try helpful deep-links; if they do nothing, the page simply stays.
-    if (m === 'CHIME') {
-      // Chime deep link (may only work on mobile with Chime installed)
-      window.location.href = 'chime://';
-      // Also show a gentle nudge:
-      setTimeout(()=>{ destInput.focus(); }, 300);
-    } else {
-      // Common crypto URI schemes (wallets usually intercept these)
-      // We don't know coin type; open generic handlers. No harm if unsupported.
-      window.location.href = 'bitcoin:';
-      setTimeout(()=>{ window.location.href = 'ethereum:'; }, 300);
-      setTimeout(()=>{ destInput.focus(); }, 600);
-    }
-  });
-
-  // Auto-calc cash out
-  function recalc(){
-    const total = parseFloat(totalEl.value || '0') || 0;
-    const keep  = parseFloat(keepEl.value  || '0') || 0;
-    const tip   = parseFloat(tipEl.value   || '0') || 0;
-    let out = total - keep - tip;
-    if (out < 0) out = 0;
-    cashOut.value = Math.floor(out);
-  }
-  [totalEl, keepEl, tipEl].forEach(el => el.addEventListener('input', recalc));
-
-  // Init based on query or default (CHIME)
-  setMethod((new URLSearchParams(location.search).get('method') || '{{ (request.args.get("method") or "CHIME")|upper }}') === 'CRYPTO' ? 'CRYPTO' : 'CHIME');
-  recalc();
-})();
+function rowConfirm(formEl, msg){
+  if(!confirm(msg)) return false;
+  // disable all buttons in this form to avoid double-submit
+  const btns = formEl.querySelectorAll('button[type="submit"]');
+  btns.forEach(b => { b.disabled = true; b.textContent = 'Working…'; });
+  return true;
+}
 </script>
 {% endblock %}

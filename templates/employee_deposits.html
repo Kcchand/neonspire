@@ -107,7 +107,9 @@
         <tbody>
           {% for r in pending_rows or [] %}
             {% set d = r.dep %}
-            {% set backend_url = r.game_backend_url or r.backend_url
+            {% set backend_url = r.game_backend_url
+                                  or r.backend_url
+                                  or (d.backend_url if d and d.backend_url else None)
                                   or (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
             <tr>
               <td class="mono" data-label="ID">#{{ d.id }}</td>
@@ -157,9 +159,22 @@
                   {% else %}
                     <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
                   {% endif %}
+                  {% if d.pay_url %}
+                    <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
+                  {% endif %}
+
+                  <!-- Automation approve+credit -->
+                  <button class="btn" type="button"
+                          onclick="approveAndCredit({{ d.id }})"
+                          {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                    Approve & Credit
+                  </button>
+
+                  <!-- Manual approve (fallback) -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit">Approve & Load (+{{ bonus or 0 }}%)</button>
                   </form>
+
                   <form method="post" action="{{ url_for('employeebp.deposits_reject', dep_id=d.id) }}">
                     <button class="btn btn-ghost" type="submit">Reject</button>
                   </form>
@@ -192,7 +207,9 @@
         <tbody>
           {% for r in recent_rows or [] %}
             {% set d = r.dep %}
-            {% set backend_url = r.game_backend_url or r.backend_url
+            {% set backend_url = r.game_backend_url
+                                  or r.backend_url
+                                  or (d.backend_url if d and d.backend_url else None)
                                   or (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
             <tr>
               <td class="mono" data-label="ID">#{{ d.id }}</td>
@@ -243,6 +260,18 @@
                   {% else %}
                     <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
                   {% endif %}
+                  {% if d.pay_url and d.status in ['PENDING','RECEIVED'] %}
+                    <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
+                  {% endif %}
+
+                  <!-- Automation approve+credit -->
+                  <button class="btn" type="button"
+                          onclick="approveAndCredit({{ d.id }})"
+                          {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                    Approve & Credit
+                  </button>
+
+                  <!-- Manual approve -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                       Approve & Load (+{{ bonus or 0 }}%)
@@ -282,7 +311,8 @@
             {% set u = (users.get(d.user_id) if users is defined else None) %}
             {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
             {% set game_name = (games[d.game_id].name if games is defined and games.get(d.game_id) else '—') %}
-            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
+            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None)
+                                  or (d.backend_url if d.backend_url else None) %}
             <tr>
               <td class="mono" data-label="ID">#{{ d.id }}</td>
               <td data-label="User">
@@ -307,6 +337,18 @@
                   {% else %}
                     <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
                   {% endif %}
+                  {% if d.pay_url and d.status in ['PENDING','RECEIVED'] %}
+                    <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
+                  {% endif %}
+
+                  <!-- Automation approve+credit -->
+                  <button class="btn" type="button"
+                          onclick="approveAndCredit({{ d.id }})"
+                          {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                    Approve & Credit
+                  </button>
+
+                  <!-- Manual approve -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                       Approve & Load (+{{ bonus or 0 }}%)
@@ -345,7 +387,8 @@
             {% set u = (users.get(d.user_id) if users is defined else None) %}
             {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
             {% set game_name = (games[d.game_id].name if games is defined and games.get(d.game_id) else '—') %}
-            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
+            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None)
+                                  or (d.backend_url if d.backend_url else None) %}
             <tr>
               <td class="mono" data-label="ID">#{{ d.id }}</td>
               <td data-label="User">
@@ -369,6 +412,18 @@
                   {% else %}
                     <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
                   {% endif %}
+                  {% if d.pay_url %}
+                    <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
+                  {% endif %}
+
+                  <!-- Automation approve+credit -->
+                  <button class="btn" type="button"
+                          onclick="approveAndCredit({{ d.id }})"
+                          {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                    Approve & Credit
+                  </button>
+
+                  <!-- Manual approve -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit">Approve & Load (+{{ bonus or 0 }}%)</button>
                   </form>
@@ -405,7 +460,8 @@
             {% set u = (users.get(d.user_id) if users is defined else None) %}
             {% set code = (refcodes.get(d.user_id) if refcodes is defined else None) %}
             {% set game_name = (games[d.game_id].name if games is defined and games.get(d.game_id) else '—') %}
-            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None) %}
+            {% set backend_url = (games[d.game_id].backend_url if games is defined and games.get(d.game_id) and games.get(d.game_id).backend_url else None)
+                                  or (d.backend_url if d.backend_url else None) %}
             <tr>
               <td class="mono" data-label="ID">#{{ d.id }}</td>
               <td data-label="User">
@@ -430,6 +486,18 @@
                   {% else %}
                     <a class="btn btn-ghost" href="{{ url_for('employeebp.deposit_detail', dep_id=d.id) }}">Details</a>
                   {% endif %}
+                  {% if d.pay_url and d.status in ['PENDING','RECEIVED'] %}
+                    <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
+                  {% endif %}
+
+                  <!-- Automation approve+credit -->
+                  <button class="btn" type="button"
+                          onclick="approveAndCredit({{ d.id }})"
+                          {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
+                    Approve & Credit
+                  </button>
+
+                  <!-- Manual approve -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                       Approve & Load (+{{ bonus or 0 }}%)
@@ -492,6 +560,24 @@
   const botBtn = document.getElementById('scrollBottomBtn');
   topBtn && topBtn.addEventListener('click', ()=> window.scrollTo({top:0, behavior:'smooth'}));
   botBtn && botBtn.addEventListener('click', ()=> window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}));
+
+  // Approve & Credit (automation)
+  async function approveAndCredit(id){
+    try{
+      const res = await fetch(`/employee/deposits/${id}/approve`, { method: 'POST' });
+      const j = await res.json().catch(()=>({}));
+      if(res.ok && j && j.ok){
+        alert('Credited successfully.');
+        location.reload();
+        return;
+      }
+      const msg = (j && (j.error || j.warning)) || `HTTP ${res.status}`;
+      alert('Credit failed: ' + msg);
+    }catch(err){
+      alert('Credit failed: ' + (err && err.message || err || 'unknown'));
+    }
+  }
+  window.approveAndCredit = approveAndCredit;
 </script>
 
 {% endblock %}

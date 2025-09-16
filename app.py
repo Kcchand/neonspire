@@ -1,10 +1,12 @@
 import os
-from flask import Flask, render_template, redirect, url_for
+from flask import Flask, render_template, redirect, url_for, jsonify
 from dotenv import load_dotenv
 from flask_login import LoginManager, current_user
 from sqlalchemy import text, inspect as sqla_inspect
 from flask_socketio import SocketIO, emit
 from flask_mail import Mail
+from gv_keepalive import start_keepalive_background
+start_keepalive_background()
 
 # models (import every model that needs a table so create_all() sees them)
 from models import (
@@ -25,6 +27,9 @@ from models import (
     DMMessage,
     ReferralCode,
 )
+
+# ✅ back-compat alias (so old imports from player_bp expecting `Deposit` still work)
+Deposit = DepositRequest
 
 # blueprints
 from auth import auth_bp
@@ -59,6 +64,13 @@ def create_app():
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-key")
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///casino.db")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # SafePay config
+    app.config["SAFE_PAY_LOGIN_URL"]   = os.getenv("SAFE_PAY_LOGIN_URL", "https://www.safepayin.com/#/base/exp")
+    app.config["SAFE_PAY_USERNAME"]    = os.getenv("SAFE_PAY_USERNAME", "")
+    app.config["SAFE_PAY_PASSWORD"]    = os.getenv("SAFE_PAY_PASSWORD", "")
+    app.config["SAFE_PAY_TIMEOUT_SEC"] = int(os.getenv("SAFE_PAY_TIMEOUT_SEC", "60"))
+    app.config["SAFE_PAY_BACKEND_URL"] = os.getenv("SAFE_PAY_BACKEND_URL", "https://www.safepayin.com/#/mch/agent")
 
     # Mail config
     app.config.update(
@@ -168,23 +180,22 @@ def create_app():
     app.register_blueprint(admin_bp)
     app.register_blueprint(employee_bp)
     app.register_blueprint(notify_bp)
-    app.register_blueprint(player_bp)   # legacy /player/...
-    app.register_blueprint(short_bp)    # clean short routes (e.g., /dep, /withd, /lob, etc.)
+    app.register_blueprint(player_bp)
+    app.register_blueprint(short_bp)
     if chat_bp:
         app.register_blueprint(chat_bp)
 
-    # ------------------ Simple extra aliases NOT in short_bp ------------------
-    # (Avoid duplicates of routes that short_bp already provides.)
+    # ------------------ Helpful vanity paths ------------------
     def _add_alias(rule: str, endpoint: str, view_func):
         if endpoint in app.view_functions:
             return
         app.add_url_rule(rule, endpoint=endpoint, view_func=view_func, methods=["GET"])
 
-    # Helpful vanity paths:
-    _add_alias("/in",        "short_bp.login_short",    lambda: redirect(url_for("auth.login_get")))
-    _add_alias("/login",     "short_bp.login_full",     lambda: redirect(url_for("auth.login_get")))
-    _add_alias("/register",  "short_bp.register_full",  lambda: redirect(url_for("auth.register_get")))
-    _add_alias("/log", "short_bp.log_short", lambda: redirect(url_for("playerbp.mylogin")))
+    _add_alias("/in",       "short_bp.login_short",     lambda: redirect(url_for("auth.login_get")))
+    _add_alias("/login",    "short_bp.login_full",      lambda: redirect(url_for("auth.login_get")))
+    _add_alias("/register", "short_bp.register_full",   lambda: redirect(url_for("auth.register_get")))
+    # ✅ correct blueprint endpoint
+    _add_alias("/log",      "short_bp.log_short_alias", lambda: redirect(url_for("playerbp.mylogin")))
 
     # ------------------ Home / Lobby ------------------
     @app.route("/")
@@ -221,6 +232,7 @@ def create_app():
                 if gid in by_id:
                     trending_games.append(by_id[gid])
 
+        # ---------- public (not signed in) ----------
         if not current_user.is_authenticated:
             return render_template(
                 "index.html",
@@ -234,6 +246,7 @@ def create_app():
                 page_title="NeonSpire Casino",
             )
 
+        # ---------- signed in ----------
         wallet = PlayerBalance.query.filter_by(user_id=current_user.id).first()
         if not wallet:
             wallet = PlayerBalance(user_id=current_user.id, balance=0)
@@ -243,7 +256,31 @@ def create_app():
         my_accounts = GameAccount.query.filter_by(user_id=current_user.id).all()
         accounts_by_game = {}
         for a in my_accounts:
-            accounts_by_game.setdefault(a.game_id, []).append(a)
+            gid = getattr(a, "game_id", None)
+            if gid is not None:
+                accounts_by_game.setdefault(gid, []).append(a)
+
+        # NEW: build a simple {game_id: balance_int} map for templates
+        possible_fields = ("balance", "credits", "amount", "chips", "coins")
+        gv_balances = {}
+        for a in my_accounts:
+            gid = getattr(a, "game_id", None)
+            if gid is None:
+                continue
+            val = 0
+            for fname in possible_fields:
+                if hasattr(a, fname):
+                    try:
+                        v = getattr(a, fname) or 0
+                        if isinstance(v, str):
+                            v = int(v.strip() or "0")
+                        else:
+                            v = int(v)
+                        val = v
+                        break
+                    except Exception:
+                        pass
+            gv_balances[gid] = val
 
         recent_credits = (
             DepositRequest.query.filter_by(user_id=current_user.id, status="LOADED")
@@ -260,7 +297,8 @@ def create_app():
             wallet=wallet,
             games=games,
             trending_games=trending_games,
-            accounts_by_game=accounts_by_game,
+            accounts_by_game=accounts_by_game,  # still available if you need it elsewhere
+            gv_balances=gv_balances,            # <-- used by template to show Credits pill
             settings=settings,
             recent_credits=recent_credits,
             notifications=notes,
@@ -270,7 +308,6 @@ def create_app():
             page_title="NeonSpire Casino",
         )
 
-    # Keep /lobby as a pure alias that lands on "/"
     @app.get("/lobby")
     def _lobby_alias():
         return redirect("/")
@@ -285,9 +322,23 @@ def create_app():
     def _on_connect():
         emit("welcome", {"msg": f"Connected (async={ASYNC_MODE})"})
 
-    # ------------------ first run bootstrap & safe patches ------------------
+    # ------------------ debug: GameVault env quick-check ------------------
+    @app.get("/debug/gamevault")
+    def debug_gamevault():
+        keys = [
+            "GAMEVAULT_ENABLED",
+            "GAMEVAULT_BASE_URL",
+            "GAMEVAULT_AGENT_ID",
+            "GAMEVAULT_ACCOUNT",
+            "GAMEVAULT_SECRET_KEY",
+            "GAMEVAULT_CREATE_PATH",
+            "GAMEVAULT_CREDIT_PATH",
+            "GAMEVAULT_DEMO",
+        ]
+        return jsonify({k: ("<set>" if os.getenv(k) else None) for k in keys})
+
+    # ------------------ bootstrap & schema patches ------------------
     with app.app_context():
-        # Create tables for all imported models
         db.create_all()
         _ensure_kv()
 
@@ -306,13 +357,13 @@ def create_app():
                     db.session.execute(text(stmt_pg or stmt_sqlite))
                 elif dialect in ("mysql", "mariadb"):
                     db.session.execute(text(stmt_mysql or stmt_sqlite))
-                else:  # sqlite
+                else:
                     db.session.execute(text(stmt_sqlite))
                 db.session.commit()
             except Exception:
                 db.session.rollback()
 
-        # --- games.backend_url (legacy patch) ---
+        # --- games.backend_url ---
         if not _has_col("games", "backend_url"):
             _add_col(
                 "ALTER TABLE games ADD COLUMN backend_url VARCHAR(500)",
@@ -320,7 +371,7 @@ def create_app():
                 "ALTER TABLE games ADD COLUMN backend_url VARCHAR(500) NULL",
             )
 
-        # --- users table new fields ---
+        # --- users patches ---
         if not _has_col("users", "mobile"):
             _add_col("ALTER TABLE users ADD COLUMN mobile VARCHAR(24)")
         if not _has_col("users", "email_verified"):
@@ -329,66 +380,44 @@ def create_app():
             _add_col("ALTER TABLE users ADD COLUMN email_verified_at DATETIME")
         if not _has_col("users", "promo_seen"):
             _add_col("ALTER TABLE users ADD COLUMN promo_seen BOOLEAN DEFAULT 0")
-
-        # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-        # ADDITION: allow disabling accounts (used by admin to disable employee)
         if not _has_col("users", "is_active"):
             _add_col(
                 "ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT 1",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
                 "ALTER TABLE users ADD COLUMN is_active TINYINT(1) DEFAULT 1",
             )
-        # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
         # --- game_accounts patches ---
         if not _has_col("game_accounts", "issued_by_id"):
-            _add_col(
-                "ALTER TABLE game_accounts ADD COLUMN issued_by_id INTEGER",
-                "ALTER TABLE game_accounts ADD COLUMN IF NOT EXISTS issued_by_id INTEGER",
-                "ALTER TABLE game_accounts ADD COLUMN issued_by_id INT NULL",
-            )
+            _add_col("ALTER TABLE game_accounts ADD COLUMN issued_by_id INTEGER")
         if not _has_col("game_accounts", "issued_at"):
-            _add_col(
-                "ALTER TABLE game_accounts ADD COLUMN issued_at DATETIME",
-                "ALTER TABLE game_accounts ADD COLUMN IF NOT EXISTS issued_at TIMESTAMP",
-                "ALTER TABLE game_accounts ADD COLUMN issued_at DATETIME NULL",
-            )
+            _add_col("ALTER TABLE game_accounts ADD COLUMN issued_at DATETIME")
         if not _has_col("game_accounts", "request_id"):
-            _add_col(
-                "ALTER TABLE game_accounts ADD COLUMN request_id INTEGER",
-                "ALTER TABLE game_accounts ADD COLUMN IF NOT EXISTS request_id INTEGER",
-                "ALTER TABLE game_accounts ADD COLUMN request_id INT NULL",
-            )
+            _add_col("ALTER TABLE game_accounts ADD COLUMN request_id INTEGER")
 
         # --- game_account_requests patches ---
         if not _has_col("game_account_requests", "approved_by_id"):
-            _add_col(
-                "ALTER TABLE game_account_requests ADD COLUMN approved_by_id INTEGER",
-                "ALTER TABLE game_account_requests ADD COLUMN IF NOT EXISTS approved_by_id INTEGER",
-                "ALTER TABLE game_account_requests ADD COLUMN approved_by_id INT NULL",
-            )
+            _add_col("ALTER TABLE game_account_requests ADD COLUMN approved_by_id INTEGER")
         if not _has_col("game_account_requests", "handled_by"):
-            _add_col(
-                "ALTER TABLE game_account_requests ADD COLUMN handled_by INTEGER",
-                "ALTER TABLE game_account_requests ADD COLUMN IF NOT EXISTS handled_by INTEGER",
-                "ALTER TABLE game_account_requests ADD COLUMN handled_by INT NULL",
-            )
+            _add_col("ALTER TABLE game_account_requests ADD COLUMN handled_by INTEGER")
         if not _has_col("game_account_requests", "approved_at"):
-            _add_col(
-                "ALTER TABLE game_account_requests ADD COLUMN approved_at DATETIME",
-                "ALTER TABLE game_account_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP",
-                "ALTER TABLE game_account_requests ADD COLUMN approved_at DATETIME NULL",
-            )
+            _add_col("ALTER TABLE game_account_requests ADD COLUMN approved_at DATETIME")
 
-        # --- deposit_requests patch ---
+        # --- deposit_requests patches ---
         if not _has_col("deposit_requests", "loaded_by"):
-            _add_col(
-                "ALTER TABLE deposit_requests ADD COLUMN loaded_by INTEGER",
-                "ALTER TABLE deposit_requests ADD COLUMN IF NOT EXISTS loaded_by INTEGER",
-                "ALTER TABLE deposit_requests ADD COLUMN loaded_by INT NULL",
-            )
+            _add_col("ALTER TABLE deposit_requests ADD COLUMN loaded_by INTEGER")
+        if not _has_col("deposit_requests", "provider"):
+            _add_col("ALTER TABLE deposit_requests ADD COLUMN provider VARCHAR(32)")
+        if not _has_col("deposit_requests", "provider_order_id"):
+            _add_col("ALTER TABLE deposit_requests ADD COLUMN provider_order_id VARCHAR(128)")
+        if not _has_col("deposit_requests", "pay_url"):
+            _add_col("ALTER TABLE deposit_requests ADD COLUMN pay_url TEXT")
+        if not _has_col("deposit_requests", "backend_url"):
+            _add_col("ALTER TABLE deposit_requests ADD COLUMN backend_url TEXT")
+        if not _has_col("deposit_requests", "meta"):
+            _add_col("ALTER TABLE deposit_requests ADD COLUMN meta TEXT")
 
-        # --- payment_settings social links & promo lines ---
+        # --- payment_settings patches ---
         ps_cols = {c["name"] for c in insp.get_columns("payment_settings")}
         needed_ps = {
             "whatsapp_url": "ALTER TABLE payment_settings ADD COLUMN whatsapp_url VARCHAR(500)",
@@ -399,6 +428,9 @@ def create_app():
             "promo_referral_line": "ALTER TABLE payment_settings ADD COLUMN promo_referral_line VARCHAR(300)",
             "promo_service_line": "ALTER TABLE payment_settings ADD COLUMN promo_service_line VARCHAR(300)",
             "promo_trust_line": "ALTER TABLE payment_settings ADD COLUMN promo_trust_line VARCHAR(300)",
+            "cashapp_handle": "ALTER TABLE payment_settings ADD COLUMN cashapp_handle VARCHAR(255)",
+            "cashapp_qr_url": "ALTER TABLE payment_settings ADD COLUMN cashapp_qr_url VARCHAR(500)",
+            "cashapp_pay_url": "ALTER TABLE payment_settings ADD COLUMN cashapp_pay_url VARCHAR(500)",
         }
         for col, stmt in needed_ps.items():
             if col not in ps_cols:
@@ -407,16 +439,7 @@ def create_app():
         # Ensure a row exists in payment_settings with id=1
         ps = db.session.get(PaymentSettings, 1)
         if not ps:
-            ps = PaymentSettings(
-                id=1,
-                bonus_percent=0,
-                min_redeem=0,
-                max_redeem=0,
-                whatsapp_url="",
-                telegram_url="",
-                facebook_url="",
-                instagram_url="",
-            )
+            ps = PaymentSettings(id=1)
             db.session.add(ps)
             db.session.commit()
 

@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+
+# Environment variables
+.env
+
+# Local data / sessions
+.data/
+.gv_session.json
+
+# IDE / Editor settings
+.vscode/
+.idea/

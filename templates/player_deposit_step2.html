@@ -22,16 +22,52 @@
     </div>
 
     <div class="method-row">
-      {% if method == 'CRYPTO' %}
+      {% if method == 'CASHAPP' %}
+        <!-- CASH APP -->
+        <div class="method">
+          <div class="method-title">Cash App</div>
+
+          {% if settings and (settings.cashapp_handle or settings.cashapp_pay_url) %}
+            {% if settings.cashapp_handle %}
+              <div class="muted" style="margin-bottom:6px">Cash App $Cashtag:</div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <input id="copyCashApp" class="input" style="flex:1; min-width:280px"
+                       value="{{ settings.cashapp_handle }}" readonly>
+                <button class="btn" type="button" onclick="copyPayField('copyCashApp')">Copy</button>
+                {% if settings.cashapp_pay_url %}
+                  <a class="btn btn-primary" href="{{ settings.cashapp_pay_url }}" target="_blank" rel="noopener">
+                    Pay now
+                  </a>
+                {% endif %}
+              </div>
+            {% elif settings.cashapp_pay_url %}
+              <a class="btn btn-primary" href="{{ settings.cashapp_pay_url }}" target="_blank" rel="noopener">
+                Open Cash App payment
+              </a>
+            {% endif %}
+          {% endif %}
+
+          {% if settings and settings.cashapp_qr_url %}
+            <img class="qr" src="{{ settings.cashapp_qr_url }}" alt="Cash App QR" style="margin-top:10px">
+          {% endif %}
+
+          <div class="muted" style="margin-top:10px">
+            After you press <strong>Proceed</strong>, we’ll prepare your Cash App payment and may redirect you to the payment page.
+            You can also attach a screenshot below (optional).
+          </div>
+        </div>
+
+      {% elif method == 'CRYPTO' %}
+        <!-- CRYPTO -->
         <div class="method">
           <div class="method-title">Crypto</div>
 
           {% if settings and settings.crypto_wallet_text %}
             <div class="muted" style="margin-bottom:6px">Wallet:</div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <input id="copyField" class="input" style="flex:1; min-width:280px"
+              <input id="copyCrypto" class="input" style="flex:1; min-width:280px"
                      value="{{ settings.crypto_wallet_text }}" readonly>
-              <button class="btn" type="button" onclick="copyPayField()">Copy</button>
+              <button class="btn" type="button" onclick="copyPayField('copyCrypto')">Copy</button>
 
               {% if settings.crypto_pay_url %}
                 <a class="btn btn-primary" href="{{ settings.crypto_pay_url }}" target="_blank" rel="noopener">
@@ -45,16 +81,18 @@
             <img class="qr" src="{{ settings.crypto_qr_url }}" alt="Crypto QR" style="margin-top:10px">
           {% endif %}
         </div>
+
       {% else %}
+        <!-- CHIME -->
         <div class="method">
           <div class="method-title">Chime</div>
 
           {% if settings and settings.chime_handle %}
             <div class="muted" style="margin-bottom:6px">Handle:</div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <input id="copyField" class="input" style="flex:1; min-width:280px"
+              <input id="copyChime" class="input" style="flex:1; min-width:280px"
                      value="{{ settings.chime_handle }}" readonly>
-              <button class="btn" type="button" onclick="copyPayField()">Copy</button>
+              <button class="btn" type="button" onclick="copyPayField('copyChime')">Copy</button>
 
               {% if settings.chime_pay_url %}
                 <a class="btn btn-primary" href="{{ settings.chime_pay_url }}" target="_blank" rel="noopener">
@@ -78,14 +116,16 @@
       <input type="hidden" name="method" value="{{ method }}">
       <input type="hidden" name="game_id" value="{{ game.id if game else '' }}">
 
-      <!-- New: direct image upload -->
+      <!-- Direct image upload -->
       <div class="form-group" style="grid-column:1/-1">
         <label for="proofFile">Upload Proof/Screenshot (PNG/JPG/WEBP)</label>
         <input id="proofFile" name="proof_file" type="file" accept=".png,.jpg,.jpeg,.webp">
-        <div class="muted" style="margin-top:4px">Attach your payment screenshot (preferred).</div>
+        <div class="muted" style="margin-top:4px">
+          Attach your payment screenshot. For Cash App, you may skip this if you’ll be redirected automatically.
+        </div>
       </div>
 
-      <!-- Optional proof URL kept -->
+      <!-- Optional proof URL -->
       <div class="form-group" style="grid-column:1/-1">
         <label for="proofUrl">Payment Proof (URL)</label>
         <input id="proofUrl" name="proof_url" type="url" placeholder="Paste a link to your payment proof (optional)">
@@ -101,9 +141,9 @@
 </div>
 
 <script>
-  async function copyPayField() {
+  async function copyPayField(id) {
     try {
-      const el = document.getElementById('copyField');
+      const el = document.getElementById(id);
       if (!el) return;
       el.select();
       el.setSelectionRange(0, 99999);

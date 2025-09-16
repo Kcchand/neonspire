@@ -3,8 +3,14 @@ import re
 import random
 import os
 import time
+# Thread kept for compatibility, though we now create CASHAPP link synchronously
+from threading import Thread
+
 from werkzeug.utils import secure_filename
-from flask import Blueprint, render_template, render_template_string, request, redirect, url_for, flash, abort, current_app
+from flask import (
+    Blueprint, render_template, render_template_string, request,
+    redirect, url_for, flash, abort, current_app, jsonify
+)
 from flask_login import login_required, current_user
 from sqlalchemy import text
 
@@ -19,15 +25,33 @@ from models import (
     WithdrawRequest,
     PaymentSettings,
     Notification,
-    ReferralCode,   # <-- REFERRALS
-    notify,
+    ReferralCode,
 )
+from models import notify
+from models import DepositRequest as Deposit  # back-compat alias
+
+# SafePay (Cash App)
+from safepay_service import create_cashapp_invoice, SafePayError
+
+# ---- Auto-provision integrations (optional; app runs if they are missing) ----
+try:
+    # GameVault: autoprovide_gamevault_login(user_id:int, game_id:int) -> dict
+    # Example success: {"ok": True, "username": "...", "password": "...", "user_id": "1205...", "created": True}
+    from autoprovision_gv import autoprovide_gamevault_login
+except Exception:  # pragma: no cover
+    autoprovide_gamevault_login = None
+
+try:
+    # UltraPanda: autoprovide_ultrapanda_login(user_id:int, game_id:int) -> dict (same shape as GV)
+    from autoprovision_up import autoprovide_ultrapanda_login
+except Exception:  # pragma: no cover
+    autoprovide_ultrapanda_login = None
 
 # ---------------------------------------------
 # Blueprints
 # ---------------------------------------------
 player_bp = Blueprint("playerbp", __name__, url_prefix="/player")
-short_bp = Blueprint("short_bp", __name__, url_prefix="")
+short_bp  = Blueprint("short_bp", __name__, url_prefix="")
 
 # ---------- tiny kv fallback (no migration needed) ----------
 def _ensure_kv():
@@ -84,10 +108,7 @@ def _uploads_dir() -> str:
     return updir
 
 def _save_image(file_storage, prefix: str) -> str | None:
-    """
-    Save an uploaded image into static/uploads and return a static URL path.
-    Returns None if no file selected or invalid.
-    """
+    """Save an uploaded image into static/uploads and return a static URL path."""
     if not file_storage or not getattr(file_storage, "filename", ""):
         return None
     filename = secure_filename(file_storage.filename or "")
@@ -143,7 +164,7 @@ def _template_exists(name: str) -> bool:
     except Exception:
         return False
 
-# ---- NEW: account helpers for employee context / auto-requests ----
+# ---- account helpers ----
 def _acc_username(acc: GameAccount | None) -> str:
     if not acc:
         return ""
@@ -172,12 +193,12 @@ def _ensure_login_request_if_missing(user_id: int, game_id: int) -> tuple[bool, 
     db.session.commit()
     return (False, "no login yet (auto-opened request)")
 
-# alias sets (match admin)
+# alias sets
 PROMO1_ALIASES = ("promo_line1", "news_line1", "ticker_line1", "headline1", "news1")
 PROMO2_ALIASES = ("promo_line2", "news_line2", "ticker_line2", "headline2", "news2")
 TREND_ALIASES  = ("trending_game_ids", "trending_ids", "trending_csv", "trending")
 
-# ---------- small internal render helpers (used by both blueprints) ----------
+# ---------- small internal render helpers ----------
 def _render_deposit_step1(preselect_game_id: int | None):
     if not _player_like():
         return abort(403)
@@ -195,10 +216,12 @@ def _render_deposit_step2(game_id: int | None, method: str, amount: int):
     if not amount or amount <= 0:
         flash("Start over and enter a valid amount.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
+
     method = (method or "CRYPTO").upper()
-    if method not in ("CRYPTO", "CHIME"):
+    if method not in ("CRYPTO", "CHIME", "CASHAPP"):
         flash("Invalid payment method.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
+
     game = db.session.get(Game, game_id) if game_id else None
     settings = _get_settings()
     return render_template(
@@ -252,24 +275,15 @@ def player_dashboard():
         .all()
     )
 
-    # --- promos (aliases + kv fallback)
-    promo_line1 = _first_attr(settings, *PROMO1_ALIASES, default=None)
-    if promo_line1 in (None, ""):
-        promo_line1 = _kv_first(*PROMO1_ALIASES, default="")
-
-    promo_line2 = _first_attr(settings, *PROMO2_ALIASES, default=None)
-    if promo_line2 in (None, ""):
-        promo_line2 = _kv_first(*PROMO2_ALIASES, default="")
+    promo_line1 = _first_attr(settings, *PROMO1_ALIASES, default=None) or _kv_first(*PROMO1_ALIASES, default="")
+    promo_line2 = _first_attr(settings, *PROMO2_ALIASES, default=None) or _kv_first(*PROMO2_ALIASES, default="")
 
     bonus_percent = getattr(settings, "bonus_percent", None)
     if bonus_percent in (None, ""):
         bp = _kv_first("bonus_percent")
         bonus_percent = int(bp) if (bp and str(bp).isdigit()) else 0
 
-    # --- trending (aliases + kv fallback, preserve order)
-    raw_csv = _first_attr(settings, *TREND_ALIASES, default=None)
-    if raw_csv in (None, ""):
-        raw_csv = _kv_first(*TREND_ALIASES, default="") or ""
+    raw_csv = _first_attr(settings, *TREND_ALIASES, default=None) or (_kv_first(*TREND_ALIASES, default="") or "")
     trending_ids: list[int] = []
     for token in str(raw_csv).split(","):
         t = token.strip()
@@ -299,7 +313,7 @@ def player_dashboard():
         bonus_percent=bonus_percent,
     )
 
-# ---------- REQUEST GAME ACCOUNT ----------
+# ---------- REQUEST GAME ACCOUNT (auto-provisions on GV & UltraPanda) ----------
 @player_bp.post("/game/<int:game_id>/request-account")
 @login_required
 def request_game_account(game_id: int):
@@ -309,31 +323,26 @@ def request_game_account(game_id: int):
     game = db.session.get(Game, game_id)
     if not game or not game.is_active:
         flash("Game not available.", "error")
-        return redirect(url_for("index"))  # redirect to lobby
+        return redirect(url_for("index"))
 
-    # Block duplicates if player already HAS a GameAccount for this game
+    # If already issued locally, short-circuit
     existing_acc = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
     if existing_acc:
         flash("⚠️ You already have this account. Please check your My Logins.", "error")
         notify(current_user.id, "⚠️ You already have this game account. Check My Logins.")
-        return redirect(url_for("playerbp.mylogin", noinfo=1))  # suppress banner
+        return redirect(url_for("playerbp.mylogin", noinfo=1))
 
-    # -------- STRONG duplicate guard (blocks double submit/race) --------
-    # If there is ANY very recent request (any status) OR any currently-open request
-    # OR an already-approved/provided one, do not create a new row.
+    # Rate-limit / duplicate prevention
     recent_cutoff = datetime.utcnow() - timedelta(seconds=60)
-
     exists = (
         GameAccountRequest.query
         .filter_by(user_id=current_user.id, game_id=game_id)
         .filter(
             (GameAccountRequest.created_at >= recent_cutoff) |
-            (GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"])) |
-            (GameAccountRequest.status.in_(["APPROVED", "PROVIDED"]))
+            (GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS", "APPROVED", "PROVIDED"]))
         )
         .first()
     )
-
     if exists:
         st = (exists.status or "").upper()
         if st in ("APPROVED", "PROVIDED"):
@@ -341,34 +350,100 @@ def request_game_account(game_id: int):
         else:
             flash("✅ Request submitted. You’ll receive credentials soon.", "success")
         return redirect(url_for("playerbp.mylogin", noinfo=1))
-    # --------------------------------------------------------------------
 
-    # Create request
-    req = GameAccountRequest(user_id=current_user.id, game_id=game_id)
+    # Create request row (for audit and UX)
+    req = GameAccountRequest(user_id=current_user.id, game_id=game_id, status="PENDING")
     db.session.add(req)
+    db.session.flush()  # obtain req.id
 
-    # Flush to fire the after_insert listener, then commit
-    db.session.flush()
+    # ---- AUTO-PROVISION on supported vendors ----
+    auto_ok = False
+    auto_err = ""
+    gname = (game.name or "").strip().lower()
+
+    def _write_local_and_finish(result: dict, note_default: str):
+        """Write back local GameAccount, mark request APPROVED, notify & redirect."""
+        acc = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
+        if not acc:
+            acc = GameAccount(user_id=current_user.id, game_id=game_id)
+            if hasattr(acc, "created_at") and not getattr(acc, "created_at", None):
+                acc.created_at = datetime.utcnow()
+            db.session.add(acc)
+
+        username = (result.get("username") or "").strip()
+        password = (result.get("password") or "").strip()
+        note     = (result.get("note") or "") or note_default
+
+        if hasattr(acc, "account_username"): acc.account_username = username
+        elif hasattr(acc, "username"):       acc.username = username
+        elif hasattr(acc, "login"):          acc.login = username
+        elif hasattr(acc, "user"):           acc.user = username
+
+        if password:
+            if hasattr(acc, "account_password"): acc.account_password = password
+            elif hasattr(acc, "password"):       acc.password = password
+            elif hasattr(acc, "passcode"):       acc.passcode = password
+            elif hasattr(acc, "pin"):            acc.pin = password
+
+        if hasattr(acc, "extra"):   acc.extra = note
+        elif hasattr(acc, "note"):  acc.note = note
+        elif hasattr(acc, "notes"): acc.notes = note
+        elif hasattr(acc, "remark"):acc.remark = note
+
+        if hasattr(acc, "request_id"):
+            acc.request_id = req.id
+
+        req.status = "APPROVED"
+        if hasattr(req, "approved_at"): req.approved_at = datetime.utcnow()
+        if hasattr(req, "updated_at"):  req.updated_at  = datetime.utcnow()
+
+        db.session.commit()
+
+        msg = f"🔐 Your {game.name} login is ready. User: {username} Pass: {password} — for more info check My Logins"
+        notify(current_user.id, msg)
+        return redirect(url_for("playerbp.mylogin", noinfo=1))
+
+    try:
+        if gname == "gamevault" and autoprovide_gamevault_login:
+            result = autoprovide_gamevault_login(current_user.id, game_id) or {}
+            auto_ok = bool(result.get("ok"))
+            if auto_ok:
+                return _write_local_and_finish(result, "Auto-provisioned via GameVault")
+            else:
+                auto_err = result.get("error") or "auto-provision failed"
+
+        elif gname == "ultrapanda" and autoprovide_ultrapanda_login:
+            result = autoprovide_ultrapanda_login(current_user.id, game_id) or {}
+            auto_ok = bool(result.get("ok"))
+            if auto_ok:
+                return _write_local_and_finish(result, "Auto-provisioned via UltraPanda")
+            else:
+                auto_err = result.get("error") or "auto-provision failed"
+
+    except Exception as e:
+        auto_err = str(e)
+
+    # If we got here, auto-provision didn’t happen; keep the request open
+    req.status = "PENDING"
     db.session.commit()
 
-    # Decide based on whether a GameAccount was issued by the listener
-    issued = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
-    if issued:
-        # Auto-fulfilled; listener already queued the "login ready" notification
-        flash(f"✅ Your login for {game.name} is ready. Check My Logins.", "success")
+    # Tell the player and staff
+    if auto_err:
+        notify(current_user.id, f"🕓 Your access request for {game.name} is being processed. (Auto-provision pending)")
     else:
-        # Not auto-fulfilled -> send ONE "processing" notification + flash
         notify(current_user.id, f"🕓 Your access request for {game.name} is being processed.")
-        flash("✅ Request submitted. You’ll receive credentials soon.", "success")
+    flash("✅ Request submitted. You’ll receive credentials soon.", "success")
 
-    # Staff heads-up (kept)
     for staff in User.query.filter(User.role.in_(("EMPLOYEE", "ADMIN"))).all():
         pname = current_user.name or current_user.email or f"Player #{current_user.id}"
-        notify(staff.id, f"New game access request: {game.name} by {pname}")
+        staff_msg = f"New game access request: {game.name} by {pname}"
+        if auto_err:
+            staff_msg += f" | auto-provision note: {auto_err}"
+        notify(staff.id, staff_msg)
 
     return redirect(url_for("index"))
 
-# =============  LEGACY DEPOSIT — 2 steps (kept)  =============
+# =============  DEPOSIT — 2 steps (supports CASHAPP)  =============
 @player_bp.get("/deposit/step1")
 @login_required
 def deposit_step1():
@@ -389,17 +464,20 @@ def deposit_step1_post():
     if amount <= 0:
         flash("Amount must be greater than zero.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
+
     method = (request.form.get("method") or "CRYPTO").upper()
-    if method not in ("CRYPTO", "CHIME"):
+    if method not in ("CRYPTO", "CHIME", "CASHAPP"):
         flash("Invalid payment method.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
+
     game_id_val = request.form.get("game_id")
-    game_id = int(game_id_val) if game_id_val and game_id_val.isdigit() else None
+    game_id = int(game_id_val) if game_id_val and str(game_id_val).isdigit() else None
     if game_id:
         g = db.session.get(Game, game_id)
         if not g or not g.is_active:
             flash("Selected game is not available.", "error")
             return redirect(url_for("playerbp.deposit_step1"))
+
     return redirect(url_for("short_bp.deposit_step2_clean", game_id=game_id or 0, method=method, amount=amount))
 
 @player_bp.get("/deposit/step2")
@@ -421,18 +499,17 @@ def deposit_submit():
         amount = 0
     method = (request.form.get("method") or "CRYPTO").upper()
     game_id_val = request.form.get("game_id")
-    game_id = int(game_id_val) if game_id_val and game_id_val.isdigit() else None
+    game_id = int(game_id_val) if game_id_val and str(game_id_val).isdigit() else None
 
-    # NEW: uploaded screenshot support
+    # uploaded screenshot support
     proof_file = request.files.get("proof_file")
     uploaded_url = _save_image(proof_file, "deposit_proof") if proof_file else None
 
-    # Backward-compatible fields
     proof_url_text = (request.form.get("proof_url") or "").strip()
     screenshot_url = (request.form.get("screenshot_url") or "").strip()
     proof_url = uploaded_url or proof_url_text or screenshot_url
 
-    if amount <= 0 or method not in ("CRYPTO", "CHIME"):
+    if amount <= 0 or method not in ("CRYPTO", "CHIME", "CASHAPP"):
         flash("Invalid deposit details.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
     if game_id:
@@ -449,6 +526,7 @@ def deposit_submit():
         method=method,
         proof_url=proof_url or "",
         status="PENDING",
+        provider="safepay" if method == "CASHAPP" else None,
         created_at=datetime.utcnow(),
     )
     db.session.add(dep)
@@ -460,13 +538,11 @@ def deposit_submit():
     if game_id:
         game = db.session.get(Game, game_id)
         game_name = f"{game.name} (#{game_id})" if game else f"Game #{game_id}"
-
         has_login, acc_note = _ensure_login_request_if_missing(current_user.id, game_id)
         if has_login and not acc_note:
             acc = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
             acc_note = f"login={_acc_username(acc) or '—'}"
 
-    # Staff notifications
     pname = current_user.name or current_user.email or f"Player #{current_user.id}"
     extra = f" | proof: {proof_url}" if proof_url else ""
     target = f" for {game_name}" if game_name else ""
@@ -476,9 +552,64 @@ def deposit_submit():
     for staff in User.query.filter(User.role.in_(("EMPLOYEE", "ADMIN"))).all():
         notify(staff.id, staff_msg)
 
+    # ===== CASH APP: create link synchronously and redirect =====
+    if method == "CASHAPP":
+        try:
+            info = create_cashapp_invoice(float(amount), f"Deposit#{dep.id}", current_app.config)
+            dep.provider = info.get("provider", "safepay-ui")
+            dep.status = "RECEIVED"
+            dep.pay_url = info.get("pay_url") or ""
+            dep.backend_url = info.get("backend_url") or ""
+            dep.provider_order_id = info.get("provider_order_id") or ""
+            dep.meta = {"provider": dep.provider, "raw": info.get("raw")}
+            db.session.commit()
+
+            if dep.pay_url:
+                return redirect(dep.pay_url)
+
+            # Fallback: show processing page if a link wasn't extracted
+            flash("Opening payment page… If nothing happens, please try again.", "success")
+            return render_template("player_deposit_processing.html", deposit=dep, page_title="Processing…")
+
+        except Exception as e:
+            dep.status = "REJECTED"
+            dep.meta = {"error": str(e)}
+            db.session.commit()
+            flash("Payment preparation failed. Please try again.", "error")
+            return redirect(url_for("playerbp.deposit_step1"))
+
+    # Non-CashApp methods continue as before
     notify(current_user.id, f"Deposit request #{dep.id} submitted. Your credits will appear shortly.")
     flash("Deposit submitted. We’ll notify you once it’s loaded.", "success")
     return redirect(url_for("index"))
+
+# =============  CASH APP processing helpers (kept for compatibility)  =============
+@player_bp.get("/deposit/<int:dep_id>/processing", endpoint="deposit_processing")
+@login_required
+def deposit_processing(dep_id: int):
+    dep = db.session.get(DepositRequest, dep_id)
+    if not dep or dep.user_id != current_user.id:
+        return abort(404)
+    return render_template("player_deposit_processing.html", deposit=dep, page_title="Processing…")
+
+@player_bp.get("/deposit/<int:dep_id>/status.json", endpoint="deposit_status_json")
+@login_required
+def deposit_status_json(dep_id: int):
+    dep = db.session.get(DepositRequest, dep_id)
+    if not dep or dep.user_id != current_user.id:
+        return jsonify({"ok": False}), 404
+    err = ""
+    try:
+        if dep.meta and isinstance(dep.meta, dict):
+            err = dep.meta.get("error", "") or dep.meta.get("reason", "")
+    except Exception:
+        err = ""
+    return jsonify({
+        "ok": True,
+        "status": dep.status or "",
+        "pay_url": dep.pay_url or "",
+        "err": err,
+    })
 
 # =============  WITHDRAW (kept)  =============
 @player_bp.get("/withdraw")
@@ -497,7 +628,7 @@ def withdraw_post():
     total_amount = request.form.get("total_amount", type=int) or 0
     keep_amount  = request.form.get("keep_amount", type=int) or 0
     tip_amount   = request.form.get("tip_amount", type=int) or 0
-    amount = request.form.get("amount", type=int) or 0
+    amount       = request.form.get("amount", type=int) or 0
     if amount <= 0 or total_amount <= 0:
         flash("Please enter a valid total and cash-out amount.", "error")
         return redirect(url_for("playerbp.withdraw_get"))
@@ -530,7 +661,6 @@ def withdraw_post():
     db.session.add(wr)
     db.session.commit()
 
-    # Employee context + ensure login request if missing
     game_name = ""
     acc_note = ""
     if game_id:
@@ -541,7 +671,6 @@ def withdraw_post():
             acc = GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first()
             acc_note = f"login={_acc_username(acc) or '—'}"
 
-    # Staff message
     pname = current_user.name or current_user.email or f"Player #{current_user.id}"
     parts = [
         f"Withdraw request #{wr.id} from {pname}",
@@ -579,7 +708,7 @@ def note_mark_read(nid: int):
     return redirect(url_for("playerbp.player_dashboard"))
 
 # =============  MY LOGINS (accounts + requests)  =============
-@player_bp.get("/mylogin", endpoint="mylogin")   # primary path
+@player_bp.get("/mylogin", endpoint="mylogin")
 @login_required
 def accounts_page():
     if not _player_like():
@@ -627,7 +756,6 @@ player_bp.add_url_rule("/deposit", endpoint="deposit_get", view_func=deposit_ste
 # =================================================================
 #                          REFERRALS
 # =================================================================
-
 def _generate_ref_code_for(user: User) -> str:
     base = "".join(re.findall(r"[A-Za-z]", (user.name or "").strip()))[:2].upper()
     if len(base) < 2:
@@ -723,7 +851,6 @@ def referral_landing(code: str):
 # -----------------------------------------------------------
 # CLEAN, SHORT ROUTES (no /player prefix) via short_bp
 # -----------------------------------------------------------
-
 @short_bp.get("/deposit/<int:game_id>", endpoint="deposit_step1_clean")
 @login_required
 def deposit_step1_clean(game_id: int):
@@ -800,7 +927,6 @@ def reg_short():
 def lob_short():
     return redirect(url_for("index"))
 
-# --- NEW: /mylogin short path (top-level) ---
 @short_bp.get("/mylogin", endpoint="mylogin_clean")
 @login_required
 def mylogin_clean():

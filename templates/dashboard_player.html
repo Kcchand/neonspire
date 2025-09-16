@@ -36,6 +36,21 @@
   /* helpers so mobile/desktop sections toggle reliably */
   .show-mobile{display:none!important}.hide-mobile{display:block!important}
   @media (max-width:768px){.show-mobile{display:block!important}.hide-mobile{display:none!important}}
+
+  /* ====== Game icon balance pill (near icon, not in card body) ====== */
+  .game-card .game-media{position:relative}
+  .gv-balance-pill{
+    position:absolute; left:10px; top:10px;
+    padding:4px 10px; border-radius:999px;
+    font-size:12px; font-weight:800; letter-spacing:.2px;
+    color:#fff; background:linear-gradient(135deg,#1ad1a5,#16c2ff);
+    box-shadow:0 10px 26px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.06) inset;
+    backdrop-filter:saturate(120%) blur(2px);
+    pointer-events:none; user-select:none;
+  }
+  @media (max-width:520px){
+    .gv-balance-pill{font-size:11px; padding:3px 8px; left:8px; top:8px}
+  }
 </style>
 
 <div class="shell player-grid" style="margin-top:14px">
@@ -154,20 +169,48 @@
 
       <div class="game-grid">
         {% for g in games %}
+          {# current user's first account for this game, if any #}
+          {% set accs = accounts_by_game.get(g.id) if accounts_by_game else None %}
+          {% set acc = (accs[0] if accs and accs|length else none) %}
+
+          {# robust GV detection: "GameVault" or "Game Vault" #}
+          {% set is_gv = ((g.name or '')|lower).replace(' ', '') == 'gamevault' %}
+
+          {# compute balance: prefer per-account (balance/credits/amount), else fall back to wallet.balance #}
+          {% set b = 0 %}
+          {% if acc %}
+            {% set b = acc.balance
+                      |default(acc.credits
+                      |default(acc.amount
+                      |default(0))) %}
+          {% endif %}
+          {% if (not b) and wallet %}
+            {% set b = wallet.balance|default(0) %}
+          {% endif %}
+
           <article class="game-card">
             <div class="game-media">
               {% if g.icon_url %}<img src="{{ g.icon_url }}" alt="{{ g.name }}">{% else %}<div class="media-fallback">🎮</div>{% endif %}
+
+              {% if current_user.is_authenticated and is_gv and b and b > 0 %}
+                <div class="gv-balance-pill" aria-label="GameVault credits">
+                  Credits: {{ b }}
+                </div>
+              {% endif %}
             </div>
+
             <div class="game-body">
               <div class="game-title" title="{{ g.name }}">{{ g.name }}</div>
               <div class="game-sub show-full" title="{{ g.description or '' }}">{{ g.description or "Hottest game on the market" }}</div>
             </div>
+
             <div class="game-actions btn-grid">
               {% if g.download_url %}
                 <a class="btn btn-action" target="_blank" href="{{ g.download_url }}">Download</a>
               {% else %}
                 <button class="btn btn-action" disabled>Download</button>
               {% endif %}
+
               {% if current_user.is_authenticated %}
                 <a class="btn btn-action" href="{{ url_for('playerbp.deposit_step1') }}?game_id={{ g.id }}">Deposit</a>
                 <a class="btn btn-action" href="{{ url_for('playerbp.withdraw_get') }}?game_id={{ g.id }}">Withdraw</a>

@@ -1,8 +1,18 @@
-# employee_bp.py
 from datetime import datetime
 from collections import defaultdict
+import asyncio
 
-from flask import Blueprint, render_template, render_template_string, request, redirect, url_for, flash, abort
+from flask import (
+    Blueprint,
+    render_template,
+    render_template_string,
+    request,
+    redirect,
+    url_for,
+    flash,
+    abort,
+    jsonify,
+)
 from flask_login import login_required, current_user
 from sqlalchemy import text, or_, func
 
@@ -18,11 +28,46 @@ from models import (
     ReferralCode,
     notify,
     PaymentSettings,   # bonus %, limits, etc.
+    Deposit,           # alias to DepositRequest
 )
+
+# ---------- Optional: External account mapping (GameVault linkage) ----------
+try:
+    from models import ExternalAccount  # fields: user_id, vendor="gamevault", vendor_user_id, vendor_username
+except Exception:  # pragma: no cover
+    ExternalAccount = None  # graceful degrade if not present
+
+# Optional helper to upsert ExternalAccount in one call
+try:
+    from models import get_or_create_external_account  # type: ignore
+except Exception:  # pragma: no cover
+    get_or_create_external_account = None
+
+# ---------- GameVault automation (HTTP client adapter) ----------
+# Capture real import errors so the UI can show them instead of "not configured".
+GV_IMPORT_ERROR = None
+try:
+    from gamevault_automation import (
+        CreditInput,
+        credit_recharge,
+        credit_redeem,
+        user_list,
+        create_user,
+        GV_USERNAME_PREFIX,
+        GV_USERNAME_SUFFIX,
+    )
+except Exception as e:  # pragma: no cover
+    CreditInput = None
+    credit_recharge = None
+    credit_redeem = None
+    user_list = None
+    create_user = None
+    GV_USERNAME_PREFIX = ""
+    GV_USERNAME_SUFFIX = ""
+    GV_IMPORT_ERROR = e
 
 # -------------------- Ready Accounts model (alias to your models.ReadyAccount) --------------------
 try:
-    # Your models.py defines ReadyAccount (NOT ReadyAccountPool). Alias it so helpers work.
     from models import ReadyAccount as ReadyAccountPool  # type: ignore
 except Exception:  # pragma: no cover
     ReadyAccountPool = None  # sentinel so features auto-disable gracefully
@@ -114,6 +159,161 @@ def _refcodes_for_user_ids(user_ids):
         return {}
     rows = ReferralCode.query.filter(ReferralCode.user_id.in_(list(set(user_ids)))).all()
     return {r.user_id: r.code for r in rows}
+
+
+# -------------------- ExternalAccount helpers --------------------
+def _get_gv_external_account(user_id: int):
+    """
+    Returns (vendor_user_id:str|None, vendor_username:str|None) for GameVault mapping,
+    or (None, None) if not found / not supported.
+    """
+    if not ExternalAccount:
+        return None, None
+    ext = ExternalAccount.query.filter_by(user_id=user_id, vendor="gamevault").first()
+    if not ext:
+        return None, None
+    return (getattr(ext, "vendor_user_id", None) or None,
+            (getattr(ext, "vendor_username", None) or "").strip() or None)
+
+# Resolve GV numeric user_id from username when missing — via user_list()
+def _gv_lookup_user_id_by_username(username: str | None) -> str | None:
+    if not (username and user_list):
+        return None
+    try:
+        # up to 5 pages (250 users). Adjust as needed for your panel size.
+        for page in range(1, 6):
+            body = user_list(page=page, page_size=50)
+            items = (body or {}).get("data", {}).get("list", []) if isinstance(body, dict) else []
+            for it in items:
+                if (it.get("login_name") or "").strip().lower() == username.strip().lower():
+                    return str(it.get("user_id"))
+    except Exception:
+        pass
+    return None
+
+def _resolve_gv_user_id_if_needed(vendor_user_id: str | None, username: str | None) -> str | None:
+    if vendor_user_id:
+        return vendor_user_id
+    return _gv_lookup_user_id_by_username(username)
+
+def _ensure_gv_external_account(user_id: int) -> tuple[str | None, str | None]:
+    """
+    Ensure there is an ExternalAccount for this user with a valid GameVault (vendor_user_id, vendor_username).
+    Will create the GV user on-demand if missing. Returns (vendor_user_id, vendor_username).
+    If ExternalAccount model or GV client is unavailable, returns (None, None).
+    """
+    if not ExternalAccount or not create_user:
+        return None, None
+
+    # existing?
+    ea = ExternalAccount.query.filter_by(user_id=user_id, vendor="gamevault").first()
+    gv_username = (ea.vendor_username.strip() if (ea and ea.vendor_username) else "").strip() if ea else ""
+    gv_user_id = (ea.vendor_user_id.strip() if (ea and ea.vendor_user_id) else "").strip() if ea else ""
+
+    # derive desired username if not set
+    if not gv_username:
+        gv_username = f"{(GV_USERNAME_PREFIX or '')}{user_id}{(GV_USERNAME_SUFFIX or '')}"
+
+    # if we don't have GV numeric id, try to find or create
+    if not gv_user_id:
+        # 1) lookup by username
+        gv_user_id = _gv_lookup_user_id_by_username(gv_username)
+
+        # 2) create if still missing
+        if not gv_user_id:
+            try:
+                create_user(gv_username)  # uses GV_DEFAULT_PASSWORD inside client
+            except Exception:
+                # even if create_user fails due to 'user exists', lookup will still find it below
+                pass
+            gv_user_id = _gv_lookup_user_id_by_username(gv_username)
+
+    # If we now have user_id, persist mapping
+    if gv_user_id:
+        if get_or_create_external_account:
+            rec = get_or_create_external_account(
+                user_id=user_id,
+                vendor="gamevault",
+                vendor_user_id=gv_user_id,
+                vendor_username=gv_username,
+            )
+            db.session.add(rec)
+        else:
+            if not ea:
+                ea = ExternalAccount(
+                    user_id=user_id,
+                    vendor="gamevault",
+                    vendor_user_id=gv_user_id,
+                    vendor_username=gv_username,
+                    created_at=datetime.utcnow(),
+                )
+                db.session.add(ea)
+            else:
+                if not ea.vendor_user_id:
+                    ea.vendor_user_id = gv_user_id
+                if not ea.vendor_username:
+                    ea.vendor_username = gv_username
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return gv_user_id, gv_username
+
+    # could not resolve/create
+    return None, gv_username or None
+
+
+def _run_maybe_async(func, *args, **kwargs):
+    """
+    Call `func` whether it's sync or async.
+    """
+    if asyncio.iscoroutinefunction(func):
+        return asyncio.run(func(*args, **kwargs))
+    res = func(*args, **kwargs)
+    if asyncio.iscoroutine(res):
+        return asyncio.run(res)
+    return res
+
+
+# -------------------- GameVault call shims (aligned to working client) --------------------
+def _call_credit(request_id: str, vendor_user_id: str | None, username: str | None,
+                 amount: int, note: str = "") -> dict:
+    """
+    Use credit_recharge(CreditInput) from gamevault_automation.
+    """
+    if not (CreditInput and credit_recharge):
+        raise RuntimeError("GameVault credit client not available")
+
+    if not vendor_user_id:
+        vendor_user_id = _resolve_gv_user_id_if_needed(None, username)
+
+    if not vendor_user_id:
+        raise RuntimeError("Missing GameVault user_id (mapping/lookup failed)")
+
+    inp = CreditInput(
+        user_id=str(vendor_user_id),
+        amount=int(amount),
+        memo=note or request_id,
+        op_type="recharge",
+    )
+    return _run_maybe_async(credit_recharge, inp) or {}
+
+
+def _call_redeem(request_id: str, vendor_user_id: str | None, username: str | None,
+                 amount: int, note: str = "") -> dict:
+    """
+    Use credit_redeem(user_id, amount) from gamevault_automation.
+    """
+    if not credit_redeem:
+        raise RuntimeError("GameVault redeem client not available")
+
+    if not vendor_user_id:
+        vendor_user_id = _resolve_gv_user_id_if_needed(None, username)
+
+    if not vendor_user_id:
+        raise RuntimeError("Missing GameVault user_id (mapping/lookup failed)")
+
+    return _run_maybe_async(credit_redeem, str(vendor_user_id), int(amount), note or request_id) or {}
 
 
 # -------------------- Ready Accounts: helpers --------------------
@@ -255,9 +455,6 @@ def _try_autofulfill_open_requests(game_id: int | None = None):
 @employee_bp.get("/ready-accounts", endpoint="ready_accounts_page")
 @login_required
 def ready_accounts_page():
-    """
-    Shows available ready accounts per game (if ReadyAccountPool/ReadyAccount exists).
-    """
     games = Game.query.order_by(Game.name.asc()).all()
     buckets = []
 
@@ -336,9 +533,6 @@ def ready_accounts_page():
 @employee_bp.post("/ready-accounts/add", endpoint="ready_accounts_add")
 @login_required
 def ready_accounts_add():
-    """
-    Add one ready account row for a game, then try auto-fulfilling open requests for that game.
-    """
     if not ReadyAccountPool:
         flash("Ready accounts feature is not configured.", "error")
         return redirect(url_for("employeebp.ready_accounts_page"))
@@ -358,7 +552,6 @@ def ready_accounts_add():
         password=password,
         note=note,
     )
-    # If model has these columns, set them sensibly
     if hasattr(row, "is_claimed"):
         row.is_claimed = False
     if hasattr(row, "added_by_id"):
@@ -369,7 +562,6 @@ def ready_accounts_add():
     db.session.add(row)
     db.session.commit()
 
-    # Try to fulfill immediately for this game
     _try_autofulfill_open_requests(game_id=game_id)
 
     flash("Ready account added.", "success")
@@ -379,9 +571,6 @@ def ready_accounts_add():
 @employee_bp.post("/ready-accounts/<int:row_id>/delete", endpoint="ready_accounts_delete")
 @login_required
 def ready_accounts_delete(row_id: int):
-    """
-    Delete a ready account row (only if it's not already claimed, if that column exists).
-    """
     if not ReadyAccountPool:
         flash("Ready accounts feature is not configured.", "error")
         return redirect(url_for("employeebp.ready_accounts_page"))
@@ -486,18 +675,12 @@ def employee_home():
 @employee_bp.get("/deposits")
 @login_required
 def deposits_list():
-    """
-    - If a valid status is chosen (PENDING/RECEIVED/LOADED/REJECTED) or `q` is provided,
-      return a unified filtered list as `items`.
-    - Otherwise, return the legacy split view: `pending` + `recent`, plus enriched rows.
-    """
     ALLOWED = {"PENDING", "RECEIVED", "LOADED", "REJECTED"}
     status = (request.args.get("status") or "").upper().strip()
     q = (request.args.get("q") or "").strip()
 
     settings = db.session.get(PaymentSettings, 1)
 
-    # ---- Filtered path (unified list) ----
     if status in ALLOWED or q:
         base = DepositRequest.query
 
@@ -522,7 +705,6 @@ def deposits_list():
         users_map = {u.id: u for u in User.query.filter(User.id.in_(user_ids)).all()} if user_ids else {}
         refcodes = _refcodes_for_user_ids(user_ids)
 
-        # NEW: map game -> backend URL so template can show "Open Backend"
         game_ids = list({d.game_id for d in items if d.game_id})
         games_map = {g.id: g for g in Game.query.filter(Game.id.in_(game_ids)).all()} if game_ids else {}
         backend_urls = {gid: _backend_url_for(g) for gid, g in games_map.items()}
@@ -536,12 +718,10 @@ def deposits_list():
             status=status,
             q=q,
             settings=settings,
-            # NEW:
             games=games_map,
             backend_urls=backend_urls,
         )
 
-    # ---- Legacy split view (no filter/query) ----
     pending = (
         DepositRequest.query.filter_by(status="PENDING")
         .order_by(DepositRequest.created_at.desc())
@@ -554,23 +734,18 @@ def deposits_list():
         .all()
     )
 
-    # Users & refcodes
     user_ids = [d.user_id for d in (pending + recent) if d.user_id]
     users_map = {u.id: u for u in User.query.filter(User.id.in_(user_ids)).all()} if user_ids else {}
     refcodes = _refcodes_for_user_ids(user_ids)
 
-    # ---------- Enriched rows with Game + GameAccount (login details) ----------
     def build_rows(deps):
         if not deps:
             return []
-
         u_ids = list({d.user_id for d in deps if d.user_id})
         g_ids = list({d.game_id for d in deps if d.game_id})
-
         users = {u.id: u for u in User.query.filter(User.id.in_(u_ids)).all()} if u_ids else {}
         games = {g.id: g for g in Game.query.filter(Game.id.in_(g_ids)).all()} if g_ids else {}
 
-        # pull all accounts for (user_id, game_id) pairs
         accounts = {}
         if u_ids and g_ids:
             rows = (
@@ -600,7 +775,6 @@ def deposits_list():
     pending_rows = build_rows(pending)
     recent_rows  = build_rows(recent)
 
-    # NEW: provide backend URLs for legacy view too
     legacy_game_ids = list({d.game_id for d in (pending + recent) if d.game_id})
     games_map = {g.id: g for g in Game.query.filter(Game.id.in_(legacy_game_ids)).all()} if legacy_game_ids else {}
     backend_urls = {gid: _backend_url_for(g) for gid, g in games_map.items()}
@@ -617,7 +791,6 @@ def deposits_list():
         settings=settings,
         pending_rows=pending_rows,
         recent_rows=recent_rows,
-        # NEW:
         games=games_map,
         backend_urls=backend_urls,
     )
@@ -693,6 +866,10 @@ def deposit_detail(dep_id: int):
 @employee_bp.post("/deposits/<int:dep_id>/loaded")
 @login_required
 def deposits_loaded(dep_id: int):
+    """
+    Legacy 'Loaded' button (manual mark). Your automated button lives at:
+    POST /employee/deposits/<id>/approve  (see approve_and_credit_deposit)
+    """
     dep = db.session.get(DepositRequest, dep_id)
     if not dep:
         flash("Deposit not found.", "error")
@@ -729,10 +906,91 @@ def deposits_reject(dep_id: int):
     db.session.commit()
 
     player = db.session.get(User, dep.user_id)
-    pname = _display_name(player) if player else f"User #{dep.user_id}"
+    pname  = _display_name(player) if player else f"User #{dep.user_id}"
     notify(dep.user_id, f"⚠️ {pname}, your deposit #{dep.id} was rejected. Please contact support.")
     flash("Deposit marked as REJECTED.", "success")
     return redirect(url_for("employeebp.deposits_list"))
+
+
+# -------------------- AUTOMATION: Approve & Credit (GameVault) --------------------
+@employee_bp.post("/deposits/<int:deposit_id>/approve", endpoint="approve_and_credit_deposit")
+@login_required
+def approve_and_credit_deposit(deposit_id: int):
+    """
+    Approve a pending/received deposit and credit the exact amount
+    in the external GameVault panel via automation.
+    """
+    # Lazy retry import if app started before env/module was ready
+    global CreditInput, credit_recharge
+    if not (CreditInput and credit_recharge):
+        try:
+            from gamevault_automation import CreditInput as _CI, credit_recharge as _cr
+            CreditInput, credit_recharge = _CI, _cr
+        except Exception as e:
+            err = GV_IMPORT_ERROR or e
+            return jsonify({"ok": False, "error": f"GameVault automation not configured: {err}"}), 500
+
+    dep = db.session.get(DepositRequest, deposit_id)
+    if not dep:
+        return jsonify({"ok": False, "error": "Deposit not found"}), 404
+    if dep.status not in ("PENDING", "RECEIVED"):
+        return jsonify({"ok": False, "error": f"Invalid status {dep.status}"}), 409
+    if not ExternalAccount:
+        return jsonify({"ok": False, "error": "ExternalAccount model not available"}), 500
+
+    # Ensure mapping exists (auto-provision GV user if needed)
+    vendor_user_id, gv_username = _get_gv_external_account(dep.user_id)
+    ensured_id, ensured_username = _ensure_gv_external_account(dep.user_id)
+    vendor_user_id = vendor_user_id or ensured_id
+    gv_username = gv_username or ensured_username
+    if not gv_username or not vendor_user_id:
+        return jsonify({"ok": False, "error": "GameVault account not mapped and auto-provision failed."}), 422
+
+    # Ensure GV numeric user_id is present (safe re-lookup)
+    vendor_user_id = _resolve_gv_user_id_if_needed(vendor_user_id, gv_username)
+
+    try:
+        result = _call_credit(
+            request_id=f"dep{dep.id}",
+            vendor_user_id=vendor_user_id,
+            username=gv_username,
+            amount=int(dep.amount or 0),
+            note=f"Deposit #{dep.id}",
+        )
+
+        # Friendly handling for expired GV session (client already retries once)
+        if isinstance(result, dict) and (result.get("unauthorized") or result.get("needs_login")):
+            return jsonify({
+                "ok": False,
+                "error": "⚠️ GameVault session expired. Run: python gv_login_capture.py --force"
+            }), 401
+
+        ok = False
+        if isinstance(result, dict):
+            ok = bool(result.get("ok", False) or result.get("code", 1) in (0, 200))
+
+        if not ok:
+            return jsonify({"ok": False, "error": f"GameVault credit failed: {result}"}), 500
+
+        # Mark as loaded locally & credit wallet
+        dep.status = "LOADED"
+        dep.loaded_at = datetime.utcnow()
+        if hasattr(dep, "loaded_by"):
+            dep.loaded_by = current_user.id
+
+        wallet = PlayerBalance.query.filter_by(user_id=dep.user_id).first()
+        if wallet:
+            wallet.balance = (wallet.balance or 0) + (dep.amount or 0)
+
+        db.session.commit()
+
+        player = db.session.get(User, dep.user_id)
+        pname  = _display_name(player) if player else f"User #{dep.user_id}"
+        notify(dep.user_id, f"✅ {pname}, your deposit #{dep.id} of {dep.amount} has been credited.")
+        return jsonify({"ok": True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"ok": False, "error": f"Credit failed: {e}"}), 500
 
 
 # -------------------- GAME ACCESS REQUESTS --------------------
@@ -835,19 +1093,11 @@ def requests_list_by_game(game_id: int):
 @employee_bp.post("/requests/<int:req_id>/provide")
 @login_required
 def requests_provide(req_id: int):
-    """
-    Save credentials (or progress) for a request. On approve:
-    - ensure a GameAccount exists
-    - write the credentials
-    - ALWAYS stamp the issuer
-    - close the request and stamp approver/handler
-    """
     req = db.session.get(GameAccountRequest, req_id)
     if not req:
         flash("Request not found.", "error")
         return redirect(url_for("employeebp.requests_list"))
 
-    # Allow 'auto' action to consume pool immediately
     action   = (request.form.get("action") or "approve").lower().strip()
     if action == "auto":
         if _autofulfill_from_pool(req):
@@ -862,7 +1112,6 @@ def requests_provide(req_id: int):
     password = (request.form.get("password") or "").strip()
     note     = (request.form.get("note") or "").strip()
 
-    # Save progress only
     if action == "save":
         req.status = "IN_PROGRESS"
         if hasattr(req, "note") and note:
@@ -877,7 +1126,6 @@ def requests_provide(req_id: int):
             return redirect(url_for("employeebp.requests_list_by_game", game_id=req.game_id))
         return redirect(url_for("employeebp.requests_list"))
 
-    # Approve: create/update account
     acc = GameAccount.query.filter_by(user_id=req.user_id, game_id=req.game_id).first()
     if not acc:
         acc = GameAccount(user_id=req.user_id, game_id=req.game_id)
@@ -939,7 +1187,8 @@ def requests_provide(req_id: int):
     return redirect(url_for("employeebp.requests_list"))
 
 
-@employee_bp.post("/requests/<int:req_id>/reject")
+# --------- NEW: reject game access request (fixes BuildError) ----------
+@employee_bp.post("/requests/<int:req_id>/reject", endpoint="requests_reject")
 @login_required
 def requests_reject(req_id: int):
     req = db.session.get(GameAccountRequest, req_id)
@@ -947,30 +1196,32 @@ def requests_reject(req_id: int):
         flash("Request not found.", "error")
         return redirect(url_for("employeebp.requests_list"))
 
+    # Only reject if not already terminal/approved
+    if (req.status or "").upper() in ("APPROVED", "PROVIDED", "REJECTED"):
+        flash(f"Cannot reject request in status {req.status}.", "error")
+        if request.referrer and req.game_id and f"/requests/game/{req.game_id}" in request.referrer:
+            return redirect(url_for("employeebp.requests_list_by_game", game_id=req.game_id))
+        return redirect(url_for("employeebp.requests_list"))
+
     req.status = "REJECTED"
-    reason = (request.form.get("reason") or "").strip()
-    if hasattr(req, "note") and reason:
-        req.note = reason
     if hasattr(req, "handled_by"):
         req.handled_by = current_user.id
     if hasattr(req, "updated_at"):
         req.updated_at = datetime.utcnow()
-
     db.session.commit()
 
-    player = db.session.get(User, req.user_id)
-    pname  = _display_name(player) if player else f"User #{req.user_id}"
-    game   = db.session.get(Game, req.game_id)
+    # Notify player
+    player = db.session.get(User, req.user_id) if req.user_id else None
+    game   = db.session.get(Game, req.game_id) if req.game_id else None
+    pname  = (player.name or player.email or f"User #{player.id}").strip() if player else f"User #{req.user_id}"
     gname  = game.name if game else "your game"
-    msg    = f"⚠️ {pname}, your login request for {gname} was rejected."
-    if reason:
-        msg += f" Reason: {reason}"
-    notify(req.user_id, msg)
+    notify(req.user_id, f"⚠️ {pname}, your access request for {gname} was rejected. Please contact support if needed.")
 
-    flash("Request rejected and player notified.", "success")
-    if request.referrer and f"/requests/game/{req.game_id}" in request.referrer:
+    flash("Request rejected.", "success")
+    if request.referrer and req.game_id and f"/requests/game/{req.game_id}" in request.referrer:
         return redirect(url_for("employeebp.requests_list_by_game", game_id=req.game_id))
     return redirect(url_for("employeebp.requests_list"))
+# ---------------------------------------------------------------------
 
 
 # Quick link to open a game's backend
@@ -1019,9 +1270,92 @@ def withdrawals_list():
     )
 
 
+@employee_bp.post("/withdrawals/<int:wd_id>/redeem", endpoint="withdrawals_redeem")
+@login_required
+def withdrawals_redeem(wd_id: int):
+    """
+    Employee clicks REDEEM first: call GameVault (type=2) ONLY.
+    If successful, set status=APPROVED so staff can finish with Mark Paid.
+    """
+    # Lazy retry import if needed
+    global credit_redeem
+    if not credit_redeem:
+        try:
+            from gamevault_automation import credit_redeem as _rw
+            credit_redeem = _rw
+        except Exception as e:
+            err = GV_IMPORT_ERROR or e
+            flash(f"GameVault not configured: {err}", "error")
+            return redirect(url_for("employeebp.withdrawals_list"))
+
+    wd = db.session.get(WithdrawRequest, wd_id)
+    if not wd:
+        flash("Withdrawal not found.", "error")
+        return redirect(url_for("employeebp.withdrawals_list"))
+    if wd.status not in ("PENDING", "IN_PROGRESS"):
+        flash(f"Cannot redeem withdrawal in status {wd.status}.", "error")
+        return redirect(url_for("employeebp.withdrawals_list"))
+
+    # Ensure mapping exists (auto-provision GV user if needed)
+    vendor_user_id, gv_username = _get_gv_external_account(wd.user_id)
+    ensured_id, ensured_username = _ensure_gv_external_account(wd.user_id)
+    vendor_user_id = vendor_user_id or ensured_id
+    gv_username = gv_username or ensured_username
+    if not gv_username or not vendor_user_id:
+        flash("Redeem not possible: GameVault account not mapped and auto-provision failed.", "error")
+        return redirect(url_for("employeebp.withdrawals_list"))
+
+    # Ensure user_id present
+    vendor_user_id = _resolve_gv_user_id_if_needed(vendor_user_id, gv_username)
+
+    try:
+        result = _call_redeem(
+            request_id=f"wd{wd.id}",
+            vendor_user_id=vendor_user_id,
+            username=gv_username,
+            amount=int(wd.amount or 0),
+            note=f"Withdraw #{wd.id}",
+        )
+        if isinstance(result, dict) and (result.get("unauthorized") or result.get("needs_login")):
+            flash("⚠️ GameVault session expired. Run: python gv_login_capture.py --force", "error")
+            return redirect(url_for("employeebp.withdrawals_list"))
+
+        ok = False
+        if isinstance(result, dict):
+            ok = bool(result.get("ok", False) or result.get("code", 1) in (0, 200))
+        if not ok:
+            raise RuntimeError(result)
+
+        wd.status = "APPROVED"
+        if hasattr(wd, "acted_by"):
+            wd.acted_by = current_user.id
+        if hasattr(wd, "acted_at"):
+            wd.acted_at = datetime.utcnow()
+        db.session.commit()
+
+        player = db.session.get(User, wd.user_id)
+        pname  = _display_name(player) if player else f"User #{wd.user_id}"
+        notify(wd.user_id, f"🔓 {pname}, your withdrawal #{wd.id} has been redeemed and is awaiting final payout.")
+        try:
+            notify(current_user.id, f"GV redeem OK for withdraw #{wd.id} (user {pname}). Now Mark Paid when sent.")
+        except Exception:
+            pass
+
+        flash("GameVault redeem successful. You can now Mark Paid.", "success")
+        return redirect(url_for("employeebp.withdrawals_list"))
+    except Exception as e:
+        db.session.rollback()
+        flash(f"GameVault redeem failed: {e}", "error")
+        return redirect(url_for("employeebp.withdrawals_list"))
+
+
 @employee_bp.post("/withdrawals/<int:wd_id>/paid")
 @login_required
 def withdrawals_paid(wd_id: int):
+    """
+    Mark withdrawal as PAID. As a fallback, if still PENDING and GV mapping is present,
+    we attempt a redeem first; otherwise we just finalize the local payout.
+    """
     wd = db.session.get(WithdrawRequest, wd_id)
     if not wd:
         flash("Withdrawal not found.", "error")
@@ -1031,6 +1365,39 @@ def withdrawals_paid(wd_id: int):
     if tip < 0:
         tip = 0
 
+    # Optional fallback redeem (if not previously APPROVED)
+    if wd.status in ("PENDING", "IN_PROGRESS"):
+        # Ensure mapping exists (auto-provision GV user if needed)
+        vendor_user_id, gv_username = _get_gv_external_account(wd.user_id)
+        ensured_id, ensured_username = _ensure_gv_external_account(wd.user_id)
+        vendor_user_id = vendor_user_id or ensured_id
+        gv_username = gv_username or ensured_username
+
+        if credit_redeem and gv_username and (wd.amount or 0) > 0 and vendor_user_id:
+            vendor_user_id = _resolve_gv_user_id_if_needed(vendor_user_id, gv_username)
+            try:
+                result = _call_redeem(
+                    request_id=f"wd{wd.id}",
+                    vendor_user_id=vendor_user_id,
+                    username=gv_username,
+                    amount=int(wd.amount or 0),
+                    note=f"Withdraw #{wd.id}",
+                )
+                if isinstance(result, dict) and (result.get("unauthorized") or result.get("needs_login")):
+                    flash("⚠️ GameVault session expired. Run: python gv_login_capture.py --force", "error")
+                    return redirect(url_for("employeebp.withdrawals_list"))
+
+                ok = False
+                if isinstance(result, dict):
+                    ok = bool(result.get("ok", False) or result.get("code", 1) in (0, 200))
+                if not ok:
+                    flash(f"GameVault redeem failed: {result}", "error")
+                    return redirect(url_for("employeebp.withdrawals_list"))
+            except Exception as e:
+                flash(f"GameVault redeem failed: {e}", "error")
+                return redirect(url_for("employeebp.withdrawals_list"))
+
+    # Local bookkeeping
     wd.status = "PAID"
     if hasattr(wd, "paid_at"):
         wd.paid_at = datetime.utcnow()
@@ -1080,3 +1447,13 @@ def _withdrawals_mark_paid(w_id: int):
 @login_required
 def _withdrawals_mark_reject(w_id: int):
     return withdrawals_reject(w_id)
+
+
+# Backend opener for a specific deposit
+@employee_bp.route('/deposits/<int:deposit_id>/open-backend')
+@login_required
+def employee_open_backend(deposit_id):
+    dep = db.session.get(Deposit, deposit_id)  # Deposit is alias to DepositRequest
+    if not dep or not getattr(dep, "backend_url", None):
+        return "Backend link not ready yet", 409
+    return redirect(dep.backend_url)
