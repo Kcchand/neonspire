@@ -1,6 +1,7 @@
 import os
 from flask import Flask, render_template, redirect, url_for, jsonify
 from dotenv import load_dotenv
+load_dotenv()
 from flask_login import LoginManager, current_user
 from sqlalchemy import text, inspect as sqla_inspect
 from flask_socketio import SocketIO, emit
@@ -45,7 +46,7 @@ try:
 except Exception:
     chat_bp = None
 
-load_dotenv()
+
 
 # ------------------------------------------------------------------
 # Socket.IO
@@ -73,19 +74,33 @@ def create_app():
     app.config["SAFE_PAY_BACKEND_URL"] = os.getenv("SAFE_PAY_BACKEND_URL", "https://www.safepayin.com/#/mch/agent")
 
     # Mail config
+    def _as_bool(val, default=False):
+        if val is None:
+            return default
+        return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
+
+    # Mail config (reads from SMTP_* in .env)
     app.config.update(
-        MAIL_SERVER=os.getenv("MAIL_SERVER", "localhost"),
-        MAIL_PORT=int(os.getenv("MAIL_PORT", "25")),
-        MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
-        MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
-        MAIL_USE_TLS=os.getenv("MAIL_USE_TLS", "false").lower() == "true",
-        MAIL_USE_SSL=os.getenv("MAIL_USE_SSL", "false").lower() == "true",
-        MAIL_DEFAULT_SENDER=os.getenv("MAIL_DEFAULT_SENDER", "no-reply@neonspire.local"),
-    )
+        MAIL_SERVER=os.getenv("MAIL_SERVER") or os.getenv("SMTP_HOST", "localhost"),
+        MAIL_PORT=int(os.getenv("MAIL_PORT") or os.getenv("SMTP_PORT", "25")),
+        MAIL_USERNAME=os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USER"),
+        MAIL_PASSWORD=os.getenv("MAIL_PASSWORD") or os.getenv("SMTP_PASS"),
+        MAIL_USE_TLS=_as_bool(os.getenv("MAIL_USE_TLS"), _as_bool(os.getenv("SMTP_TLS"), False)),
+        MAIL_USE_SSL=_as_bool(os.getenv("MAIL_USE_SSL"), _as_bool(os.getenv("SMTP_SSL"), False)),
+        MAIL_DEFAULT_SENDER=os.getenv("MAIL_DEFAULT_SENDER") or os.getenv("SMTP_FROM", "no-reply@neonspire.local"),
+)
 
     db.init_app(app)
     socketio.init_app(app)
     mail.init_app(app)
+
+
+    
+
+
+
+
+    
 
     # ------------------ tiny kv fallback (shared) ------------------
     def _ensure_kv():
