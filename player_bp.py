@@ -31,7 +31,7 @@ from models import notify
 from models import DepositRequest as Deposit  # back-compat alias
 
 # SafePay (Cash App)
-from safepay_service import create_cashapp_invoice, SafePayError
+
 
 # ---- Auto-provision integrations (optional; app runs if they are missing) ----
 try:
