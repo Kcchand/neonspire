@@ -45,13 +45,19 @@ except Exception as e:  # pragma: no cover
     GV_IMPORT_ERROR = e
 
 # ===== JUWA automation =====
+# ===== JUWA automation =====
+import logging, traceback
 try:
     from automation.juwa_api import recharge_sync, redeem_sync  # recharge/redeem
-except Exception:  # pragma: no cover
-    def recharge_sync(*a, **k):  # soft fallback
-        return {"ok": False, "error": "juwa_api not available"}
-    def redeem_sync(*a, **k):    # soft fallback
-        return {"ok": False, "error": "juwa_api not available"}
+except Exception as err:  # pragma: no cover
+    logging.error("JUWA import failed: %s", err)
+    logging.debug("Traceback:\n%s", traceback.format_exc())
+
+    def recharge_sync(*a, **k):  # soft fallback with detail
+        return {"ok": False, "error": f"juwa_api import failed: {err.__class__.__name__}: {err}"}
+
+    def redeem_sync(*a, **k):
+        return {"ok": False, "error": f"juwa_api import failed: {err.__class__.__name__}: {err}"}
 
 # ===== MILKYWAY automation (UI bot) =====
 try:

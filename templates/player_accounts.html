@@ -66,20 +66,7 @@
         <div class="muted">Your login details (auto-setup)</div>
       </div>
 
-      <!-- NEW: Player self-serve JUWA ID request -->
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <div class="safetynote">Tip: Only reveal credentials when you need to, and never share screenshots.</div>
-        <form method="post" action="{{ url_for('playerbp.juwa_request_id') }}">
-          {% if csrf_token is defined %}
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          {% endif %}
-          <button class="pill-act" type="submit" aria-label="Request JUWA ID">
-            + Request JUWA ID
-          </button>
-        </form>
-      </div>
-      <!-- /NEW -->
-    </div>
+    
 
     <div class="table">
       <div class="t-head">
