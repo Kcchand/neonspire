@@ -36,3 +36,4 @@ rq==1.16.2
 
 # --- Browser automation
 playwright==1.55.0
+httpx==0.27.2
