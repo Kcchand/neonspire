@@ -1,25 +1,28 @@
-import time, threading, logging, os
-from gamevault_automation import ping_ok, KEEPALIVE_SECS
+# gv_keepalive.py
+import os, threading, time, logging
 
 log = logging.getLogger("gv_keepalive")
-if not log.handlers:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
-_started = False
-
-def _loop():
-    interval = max(120, KEEPALIVE_SECS or 300)  # never < 2 minutes
-    log.info("GameVault keepalive loop every %ss", interval)
-    while True:
-        ok = ping_ok()
-        if not ok:
-            log.warning("Keepalive ping not OK (auto-reauth attempted by client).")
-        time.sleep(interval)
 
 def start_keepalive_background():
-    global _started
-    if _started:
+    """
+    For the new 2Captcha-flow, we don't reuse sessions, so keepalive is optional.
+    Set GAMEVAULT_KEEPALIVE_SECS<=0 to disable.
+    """
+    secs = int(os.getenv("GAMEVAULT_KEEPALIVE_SECS", "0") or 0)
+    if secs <= 0:
+        log.info("Keepalive disabled (GAMEVAULT_KEEPALIVE_SECS<=0).")
         return
-    t = threading.Thread(target=_loop, name="gv-keepalive", daemon=True)
+
+    def _tick():
+        log.info("GameVault keepalive loop every %ss", secs)
+        while True:
+            try:
+                # No-op: we don't want to waste 2Captcha on background pings.
+                # If you decide to add a *lightweight* health check later, do it here.
+                pass
+            except Exception as e:
+                log.warning("Keepalive tick error: %s", e)
+            time.sleep(secs)
+
+    t = threading.Thread(target=_tick, daemon=True)
     t.start()
-    _started = True

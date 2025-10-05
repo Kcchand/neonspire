@@ -10,7 +10,8 @@
       <div class="admin-actions" style="display:flex;gap:8px;flex-wrap:wrap">
         <a class="btn chip-btn" href="{{ url_for('employeebp.deposits_list') }}">Deposits</a>
         <a class="btn chip-btn" href="{{ url_for('employeebp.requests_list') }}">Game Requests</a>
-        <a class="btn chip-btn" href="{{ url_for('employeebp.ready_accounts_page') }}">Ready Accounts</a>
+        <!-- FIXED: removed broken ready_accounts_page -->
+        <!-- <a class="btn chip-btn" href="{{ url_for('employeebp.ready_accounts_page') }}">Ready Accounts</a> -->
         <a class="btn chip-btn" href="{{ url_for('employeebp.withdrawals_list') }}">Withdrawals</a>
         <a class="btn chip-btn btn-primary" href="{{ url_for('chat_bp.inbox') }}">Live Chat</a>
       </div>

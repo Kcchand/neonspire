@@ -97,11 +97,6 @@ def create_app():
 
     
 
-
-
-
-    
-
     # ------------------ tiny kv fallback (shared) ------------------
     def _ensure_kv():
         try:
@@ -199,6 +194,7 @@ def create_app():
     app.register_blueprint(short_bp)
     if chat_bp:
         app.register_blueprint(chat_bp)
+        
 
     # ------------------ Helpful vanity paths ------------------
     def _add_alias(rule: str, endpoint: str, view_func):

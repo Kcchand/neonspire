@@ -8,6 +8,7 @@
   .tbl thead th { text-align:left; font-weight:700; opacity:.9; position:sticky; top:0; background:rgba(0,0,0,.25); backdrop-filter:blur(6px); }
   .tbl td.actions { text-align:right; white-space:nowrap; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  .muted { opacity:.75; }
   .muted-wrap { display:flex; flex-direction:column; gap:2px; }
   .cred { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .cred .pill { padding:2px 8px; border-radius:8px; border:1px solid var(--stroke); font-size:12px; }
@@ -27,6 +28,9 @@
   /* Floating scroll buttons */
   .scroll-fab { position:fixed; right:16px; bottom:16px; display:flex; flex-direction:column; gap:8px; z-index:60; }
   .scroll-fab .btn { border-radius:999px; padding:10px 12px; box-shadow:0 8px 24px rgba(0,0,0,.25); }
+
+  /* Success state for Approve & Credit */
+  .btn-success { background:#16a34a; border-color:#16a34a; color:#fff; }
 
   /* ---------- Mobile: convert table rows to cards ---------- */
   @media (max-width: 768px){
@@ -164,7 +168,8 @@
                   {% endif %}
 
                   <!-- Automation approve+credit -->
-                  <button class="btn" type="button"
+                  <button class="btn approve-credit-btn" type="button"
+                          data-id="{{ d.id }}"
                           onclick="approveAndCredit({{ d.id }})"
                           {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                     Approve & Credit
@@ -233,13 +238,13 @@
                   <div class="cred">
                     {% if r.login_user %}
                       <span class="pill mono">{{ r.login_user }}</span>
-                      <button class="icon-btn" type="button" data-copy="{{ r.login_user }}" title="Copy username" aria-label="Copy username">📋</button>
+                      <button class="icon-btn" type="button" data-copy="{{ r.login_user }}" title="Copy username">📋</button>
                     {% endif %}
                   </div>
                   <div class="cred" style="margin-top:4px">
                     {% if r.login_pass %}
                       <span class="pill mono">{{ r.login_pass }}</span>
-                      <button class="icon-btn" type="button" data-copy="{{ r.login_pass }}" title="Copy password" aria-label="Copy password">📋</button>
+                      <button class="icon-btn" type="button" data-copy="{{ r.login_pass }}" title="Copy password">📋</button>
                     {% endif %}
                   </div>
                   {% if r.login_note %}
@@ -252,7 +257,7 @@
               <td data-label="Amount">{{ d.amount }}</td>
               <td data-label="Method">{{ d.method }}</td>
               <td data-label="Status">{{ d.status }}</td>
-              <td class="mono" data-label="Updated">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') if (d.updated_at or d.created_at) }}</td>
+              <td class="mono" data-label="Updated">{{ (d.updated_at or d.created_at).strftime('%Y-%m-%d %H:%M') }}</td>
               <td class="actions" data-label="Action">
                 <div class="row gap8">
                   {% if backend_url %}
@@ -264,14 +269,13 @@
                     <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
                   {% endif %}
 
-                  <!-- Automation approve+credit -->
-                  <button class="btn" type="button"
+                  <button class="btn approve-credit-btn" type="button"
+                          data-id="{{ d.id }}"
                           onclick="approveAndCredit({{ d.id }})"
                           {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                     Approve & Credit
                   </button>
 
-                  <!-- Manual approve -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                       Approve & Load (+{{ bonus or 0 }}%)
@@ -341,14 +345,13 @@
                     <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
                   {% endif %}
 
-                  <!-- Automation approve+credit -->
-                  <button class="btn" type="button"
+                  <button class="btn approve-credit-btn" type="button"
+                          data-id="{{ d.id }}"
                           onclick="approveAndCredit({{ d.id }})"
                           {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                     Approve & Credit
                   </button>
 
-                  <!-- Manual approve -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                       Approve & Load (+{{ bonus or 0 }}%)
@@ -367,6 +370,7 @@
       </table>
     </div>
 
+  {# =================== LEGACY DEFAULT (pending + recent) =================== #}
   {% else %}
     <h3 class="h3 mt16">Pending</h3>
     <div class="table-wrap">
@@ -416,14 +420,13 @@
                     <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
                   {% endif %}
 
-                  <!-- Automation approve+credit -->
-                  <button class="btn" type="button"
+                  <button class="btn approve-credit-btn" type="button"
+                          data-id="{{ d.id }}"
                           onclick="approveAndCredit({{ d.id }})"
                           {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                     Approve & Credit
                   </button>
 
-                  <!-- Manual approve -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit">Approve & Load (+{{ bonus or 0 }}%)</button>
                   </form>
@@ -490,14 +493,13 @@
                     <a class="btn btn-ghost" href="{{ d.pay_url }}" target="_blank" rel="noopener">Open Invoice</a>
                   {% endif %}
 
-                  <!-- Automation approve+credit -->
-                  <button class="btn" type="button"
+                  <button class="btn approve-credit-btn" type="button"
+                          data-id="{{ d.id }}"
                           onclick="approveAndCredit({{ d.id }})"
                           {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                     Approve & Credit
                   </button>
 
-                  <!-- Manual approve -->
                   <form method="post" action="{{ url_for('employeebp.deposits_loaded', dep_id=d.id) }}">
                     <button class="btn btn-primary" type="submit" {% if d.status not in ['PENDING','RECEIVED'] %}disabled{% endif %}>
                       Approve & Load (+{{ bonus or 0 }}%)
@@ -556,25 +558,47 @@
   }
 
   // Scroll helpers
-  const topBtn = document.getElementById('scrollTopBtn');
-  const botBtn = document.getElementById('scrollBottomBtn');
-  topBtn && topBtn.addEventListener('click', ()=> window.scrollTo({top:0, behavior:'smooth'}));
-  botBtn && botBtn.addEventListener('click', ()=> window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}));
+  document.getElementById('scrollTopBtn')?.addEventListener('click', ()=> window.scrollTo({top:0, behavior:'smooth'}));
+  document.getElementById('scrollBottomBtn')?.addEventListener('click', ()=> window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}));
 
-  // Approve & Credit (automation)
+  // Approve & Credit (automation) with loading → green success/fail UX
   async function approveAndCredit(id){
+    const btn = document.querySelector(`.approve-credit-btn[data-id="${id}"]`);
+    let restore;
+    if(btn){
+      restore = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Loading…';
+      btn.classList.remove('btn-success');
+    }
     try{
-      const res = await fetch(`/employee/deposits/${id}/approve`, { method: 'POST' });
+      const res = await fetch(`/employee/deposits/${id}/approve`, { 
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      });
       const j = await res.json().catch(()=>({}));
       if(res.ok && j && j.ok){
-        alert('Credited successfully.');
-        location.reload();
+        if(btn){
+          btn.textContent = '✅ Success';
+          btn.classList.add('btn-success');   // turn green on success
+        }
+        setTimeout(()=> location.reload(), 900);
         return;
       }
       const msg = (j && (j.error || j.warning)) || `HTTP ${res.status}`;
+      if(btn){ btn.textContent = '❌ Failed'; }
       alert('Credit failed: ' + msg);
     }catch(err){
+      if(btn){ btn.textContent = '❌ Failed'; }
       alert('Credit failed: ' + (err && err.message || err || 'unknown'));
+    }finally{
+      // optional reset before reload – keep success green until reload
+      setTimeout(()=>{
+        if(btn){
+          btn.textContent = restore || 'Approve & Credit';
+          btn.disabled = false;
+        }
+      }, 1200);
     }
   }
   window.approveAndCredit = approveAndCredit;

@@ -1,421 +1,688 @@
-# gamevault_automation.py  — FINAL
+# gamevault_automation.py
+# FINAL — UI login (2Captcha) → API create / recharge / redeem
+# with persistent user map to avoid userList filter issues
 
-import os, json, time, logging, subprocess, sys, re
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from __future__ import annotations
+
+import os, re, time, json, base64, random, string
+from typing import Dict, Optional, List, Tuple
 from urllib.parse import urljoin
 
 import requests
-from dotenv import load_dotenv
-load_dotenv(override=True)
+from playwright.sync_api import sync_playwright, Response
+from rpa.captcha import solve_image_captcha
 
-log = logging.getLogger("gamevault")
-if not log.handlers:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+# =============================================================================
+# ENV & Defaults
+# =============================================================================
+BASE_URL  = os.getenv("GAMEVAULT_WEB_URL", "https://agent.gamevault999.com/").rstrip("/")
+API_BASE  = os.getenv("GAMEVAULT_BASE_URL", f"{BASE_URL}/api").rstrip("/")
+LOGIN_URL = os.getenv("GV_LOGIN_URL", f"{BASE_URL}/login")
 
-# -------------------- ENV helpers --------------------
-def env(*names: str, default: Optional[str] = None) -> str:
-    for n in names:
-        v = os.environ.get(n)
-        if v not in (None, ""):
-            return v
-    return default or ""
+GV_USER = os.getenv("GV_USERNAME", "")
+GV_PASS = os.getenv("GV_PASSWORD", "")
+CAPTCHA_KEY = (os.getenv("TWO_CAPTCHA_APIKEY") or os.getenv("TWO_CAPTCHA_API_KEY") or "").strip()
 
-def env_int(name: str, default: int) -> int:
+TIMEOUT_MS = int(os.getenv("GV_TIMEOUT_MS", os.getenv("GAMEVAULT_TIMEOUT_MS", "60000")))
+UA = os.getenv("GV_USER_AGENT", "Mozilla/5.0")
+
+# Persistent map path (repo root)
+MAP_PATH = os.path.join(os.getcwd(), "gv_users.json")
+
+def _norm_sel(s: str) -> str:
+    return ", ".join([p.strip() for p in (s or "").split(",") if p.strip()])
+
+# IMPORTANT: flexible captcha selectors; no trailing commas
+SEL_CAPTCHA_IMG = _norm_sel(os.getenv(
+    "GV_CAPTCHA_IMG_SEL",
+    "form .el-input-group__append img, form .el-input-group__append canvas, "
+    "form img[src*='captcha'], form img[alt*='captcha'], "
+    "form img[src*='verify'], form img[alt*='verify'], form canvas"
+))
+SEL_CAPTCHA_INPUT_FORCE = (os.getenv("GV_CAPTCHA_INPUT_FORCE", "") or "").strip() or None
+
+UN_PREFIX = os.getenv("GV_USERNAME_PREFIX", "user_")
+UN_SUFFIX = os.getenv("GV_USERNAME_SUFFIX", "_gv")
+DEF_PASS  = os.getenv("GV_DEFAULT_PASSWORD", "Abc12345")
+
+# =============================================================================
+# Token cache and headers
+# =============================================================================
+_TOKEN_CACHE: Optional[str] = None
+
+def _api_headers(token: str, json_mode: bool = True) -> dict:
+    h = {
+        "User-Agent": UA,
+        "Referer": BASE_URL + "/",
+        "Origin": BASE_URL,
+        # many tenants require BOTH:
+        "Authorization": f"Bearer {token}",
+        "token": token,
+    }
+    h["Content-Type"] = "application/json" if json_mode else "application/x-www-form-urlencoded"
+    return h
+
+# =============================================================================
+# Local user map (username → {user_id, game_id})
+# =============================================================================
+def _map_load() -> dict:
     try:
-        return int(os.environ.get(name, "").strip() or default)
-    except Exception:
-        return default
-
-# -------------------- Config --------------------
-ENABLED             = env("GAMEVAULT_ENABLED", "GV_ENABLED", default="true").lower() == "true"
-BASE_URL            = env("GAMEVAULT_BASE_URL", "GV_BASE_URL", default="").rstrip("/")
-CREATE_PATH         = env("GAMEVAULT_CREATE_PATH", "GV_CREATE_PATH", default="/user/addUser")
-CREDIT_PATH         = env("GAMEVAULT_CREDIT_PATH", "GV_CREDIT_PATH", default="/user/rechargeRedeem")
-REDEEM_PATH         = env("GAMEVAULT_REDEEM_PATH", "GV_REDEEM_PATH", default="/user/rechargeRedeem")
-USERLIST_PATH       = env("GAMEVAULT_USERLIST_PATH", "GV_USERLIST_PATH", default="/user/userList")
-USERLIST_METHOD     = env("GAMEVAULT_USERLIST_METHOD", "GV_USERLIST_METHOD", default="POST").upper()
-PING_PATH           = env("GAMEVAULT_PING_PATH", "GV_PING_PATH", default=USERLIST_PATH)
-PING_METHOD         = env("GAMEVAULT_PING_METHOD", "GV_PING_METHOD", default=USERLIST_METHOD).upper()
-
-AUTH_BEARER_DEFAULT = env("GAMEVAULT_AUTH", "GV_AUTH", default="")
-SESSION_ID_DEFAULT  = env("GAMEVAULT_SESSION", "GV_SESSION", default="")
-COOKIE_ACCOUNT      = env("GAMEVAULT_COOKIE_ACCOUNT", "GV_COOKIE_ACCOUNT", default="")
-COOKIE_PASSWORD     = env("GAMEVAULT_COOKIE_PASSWORD", "GV_COOKIE_PASSWORD", default="")
-AGENT_ID            = env("GAMEVAULT_AGENT_ID", "GV_AGENT_ID", default="")
-
-TIMEOUT_MS          = env_int("GAMEVAULT_TIMEOUT_MS", 45000)
-UA                  = env("GAMEVAULT_UA", "GV_UA", default="CryptoCasino/1.0 (GameVault)")
-SESSION_FILE        = env("GAMEVAULT_SESSION_FILE", "GV_SESSION_FILE", default=".gv_session.json")
-KEEPALIVE_SECS      = env_int("GAMEVAULT_KEEPALIVE_SECS", 300)
-LOGIN_SCRIPT        = env("GAMEVAULT_LOGIN_SCRIPT", "GV_LOGIN_SCRIPT", default="gv_login_capture.py")
-TX_JSON             = env("GAMEVAULT_TX_JSON", default="false").lower() == "true"  # most panels need FALSE
-DEBUG_AUTH          = env("GAMEVAULT_DEBUG_AUTH", default="false").lower() == "true"
-
-GV_USERNAME_PREFIX  = env("GV_USERNAME_PREFIX", default="")
-GV_USERNAME_SUFFIX  = env("GV_USERNAME_SUFFIX", default="")
-GV_DEFAULT_PASSWORD = env("GV_DEFAULT_PASSWORD", default="123456")
-
-if not BASE_URL:
-    raise RuntimeError("GAMEVAULT_BASE_URL is not set.")
-
-# -------------------- Session file helpers --------------------
-def _read_json(path: str) -> Optional[Dict[str, Any]]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(MAP_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return None
+        return {}
 
-def _normalize_session_dict(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    raw = raw or {}
-    auth = (raw.get("auth") or raw.get("bearer") or AUTH_BEARER_DEFAULT or "").strip()
-    cookies_raw = raw.get("cookies") or {}
-    session_val = cookies_raw.get("session") or raw.get("phpsessid") or SESSION_ID_DEFAULT
-    account_val = cookies_raw.get("account") or raw.get("account_cookie") or COOKIE_ACCOUNT
-    password_val= cookies_raw.get("password") or raw.get("password_cookie") or COOKIE_PASSWORD
-    return {
-        "auth": auth,
-        "cookies": {"session": session_val or "", "account": account_val or "", "password": password_val or ""},
-        "updated_at": int(raw.get("updated_at") or time.time()),
-    }
-
-def _load_session_from_file() -> Dict[str, Any]:
-    if not os.path.exists(SESSION_FILE):
-        data = _normalize_session_dict({})
-        try:
-            os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
-        except Exception:
-            pass
-        try:
-            with open(SESSION_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass
-        return data
-    data = _read_json(SESSION_FILE)
-    if data is None:
-        return _normalize_session_dict({})
-    return _normalize_session_dict(data)
-
-def _save_session_to_file(data: Dict[str, Any]) -> None:
+def _map_save(m: dict) -> None:
     try:
-        out = _normalize_session_dict(data)
-        out["updated_at"] = int(time.time())
-        with open(SESSION_FILE, "w", encoding="utf-8") as f:
-            json.dump(out, f, indent=2)
-    except Exception as e:
-        log.warning("Could not write session file %s: %s", SESSION_FILE, e)
-
-# -------------------- HTTP core with auto-reauth --------------------
-class GVClient:
-    def __init__(self):
-        self.sess = requests.Session()
-        self.sess.headers.update({
-            "User-Agent": UA,
-            "Accept": "application/json, */*;q=0.8",
-            "Origin": BASE_URL.split("/api")[0] if "/api" in BASE_URL else BASE_URL,
-        })
-        self._apply_auth_from_file()
-
-    def _apply_auth_from_file(self):
-        info = _load_session_from_file()
-        self.bearer = (info.get("auth") or AUTH_BEARER_DEFAULT or "").strip()
-
-        ck = info.get("cookies") or {}
-        sess_val = ck.get("session", "") or ck.get("phpsessid", "")
-        if sess_val:
-            self.sess.cookies.set("PHPSESSID", sess_val)
-            self.sess.cookies.set("session", sess_val)
-        if ck.get("account"):
-            self.sess.cookies.set("account", ck.get("account"))
-        if ck.get("password"):
-            self.sess.cookies.set("password", ck.get("password"))
-
-        if self.bearer:
-            self.sess.headers["Authorization"] = self.bearer
-            raw = self.bearer.split(" ", 1)[1] if self.bearer.lower().startswith("bearer ") else self.bearer
-            self.sess.headers["token"] = raw
-
-        origin = BASE_URL.split("/api")[0] if "/api" in BASE_URL else BASE_URL
-        self.sess.headers.setdefault("Referer", origin + "/")
-        self.sess.headers.setdefault("X-Requested-With", "XMLHttpRequest")
-        self.sess.headers.setdefault("Accept-Language", "en-US,en;q=0.9")
-
-        if DEBUG_AUTH:
-            masked_auth = (self.bearer[:16] + "…") if self.bearer else ""
-            masked_sess = (sess_val[:8] + "…") if sess_val else ""
-            log.info("GV auth applied (auth=%s, PHPSESSID=%s, account=%s)", masked_auth, masked_sess, ck.get("account",""))
-
-    def _persist_current_auth(self):
-        cookies = {
-            "session": self.sess.cookies.get("session", "") or self.sess.cookies.get("PHPSESSID", ""),
-            "account": self.sess.cookies.get("account", ""),
-            "password": self.sess.cookies.get("password", ""),
-        }
-        _save_session_to_file({"auth": self.sess.headers.get("Authorization", self.bearer), "cookies": cookies})
-
-    def _full(self, path: str) -> str:
-        if path.startswith("http"):
-            return path
-        return urljoin(BASE_URL + "/", path.lstrip("/"))
-
-    def _needs_reauth(self, resp: requests.Response, body: Any) -> bool:
-        if resp.status_code in (401, 403):
-            return True
-        if isinstance(body, dict):
-            code = str(body.get("code") if "code" in body else body.get("status", "")).strip()
-            if code in ("401", 401, "403", 403):
-                return True
-            msg = str(body.get("message") or body.get("msg") or "").lower()
-            if "please login" in msg or ("token" in msg and ("expire" in msg or "invalid" in msg)):
-                return True
-        return False
-
-    def _login_refresh(self):
-        script = os.path.join(os.path.dirname(__file__), LOGIN_SCRIPT)
-        log.info("Refreshing GameVault session via: %s --force", LOGIN_SCRIPT)
-        proc = subprocess.run([sys.executable, script, "--force"], capture_output=True, text=True, timeout=150)
-        if proc.returncode != 0:
-            raise RuntimeError(f"GameVault login script failed: rc={proc.returncode}\n{proc.stderr or proc.stdout}")
-        self._apply_auth_from_file()
-        log.info("GameVault session refreshed.")
-
-    def _attach_defaults(self, kwargs: Dict[str, Any], method: str) -> Dict[str, Any]:
-        headers = kwargs.setdefault("headers", {})
-        if method.upper() != "GET":
-            if TX_JSON:
-                headers.setdefault("Content-Type", "application/json;charset=UTF-8")
-            else:
-                if "data" in kwargs and "json" not in kwargs:
-                    headers.setdefault("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-        return kwargs
-
-    def _inject_agent(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        if AGENT_ID and "agent_id" not in payload and "agentId" not in payload:
-            payload["agent_id"] = AGENT_ID
-            payload["agentId"]  = AGENT_ID
-        return payload
-
-    def request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
-        if not ENABLED:
-            raise RuntimeError("GAMEVAULT_ENABLED is false")
-        url = self._full(path)
-        timeout = (TIMEOUT_MS or 45000) / 1000.0
-
-        kwargs = self._attach_defaults(kwargs, method)
-        r = self.sess.request(method.upper(), url, timeout=timeout, **kwargs)
-
-        try:
-            body = r.json()
-        except Exception:
-            body = {"status_code": r.status_code, "text": r.text}
-
-        if self._needs_reauth(r, body):
-            self._login_refresh()
-            r = self.sess.request(method.upper(), url, timeout=timeout, **kwargs)
-            try:
-                body = r.json()
-            except Exception:
-                body = {"status_code": r.status_code, "text": r.text}
-
-        if r.status_code >= 400:
-            raise RuntimeError(f"GameVault HTTP {r.status_code}: {body}")
-        self._persist_current_auth()
-        return body
-
-GV = GVClient()  # singleton
-
-# -------------------- Public dataclasses & helpers --------------------
-@dataclass
-class CreditInput:
-    """Input for recharge/redeem calls (accepts numeric user_id or username)."""
-    user_id: str  # may be numeric id OR gv login name (we’ll detect)
-    amount: float
-    memo: str = ""
-    op_type: str = "recharge"  # or "redeem"
-
-# Legacy shims (UI may import these)
-@dataclass
-class LegacyCreditInput:
-    request_id: str
-    username: str
-    amount: int
-    note: str = ""
-    vendor_user_id: Optional[str] = None
-
-@dataclass
-class RedeemInput:
-    request_id: str
-    username: str
-    amount: int
-    note: str = ""
-    vendor_user_id: Optional[str] = None
-
-# -------------------- User lookup --------------------
-def _lookup_user_id_by_username(username: Optional[str]) -> Optional[str]:
-    if not username:
-        return None
-    try:
-        for page in range(1, 11):  # scan up to 500 users if needed
-            body = user_list(page=page, page_size=50)
-            items = (body or {}).get("data", {}).get("list", []) if isinstance(body, dict) else []
-            for it in items:
-                if (it.get("login_name") or "").strip().lower() == username.strip().lower():
-                    return str(it.get("user_id"))
+        with open(MAP_PATH, "w", encoding="utf-8") as f:
+            json.dump(m, f, indent=2, ensure_ascii=False)
     except Exception:
-        return None
+        pass
+
+def _map_get(username_or_gid: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Returns (user_id, account_username, game_id) from local map if present."""
+    m = _map_load()
+    key = (username_or_gid or "").strip()
+    # direct key
+    row = m.get(key)
+    if isinstance(row, dict) and row.get("user_id"):
+        return str(row.get("user_id")), key, (row.get("game_id") if row.get("game_id") is not None else None)
+    # case-insensitive username
+    for k, v in m.items():
+        if k.strip().lower() == key.lower() and isinstance(v, dict) and v.get("user_id"):
+            return str(v.get("user_id")), k, (v.get("game_id") if v.get("game_id") is not None else None)
+    # reverse lookup by game_id
+    for k, v in m.items():
+        if isinstance(v, dict) and str(v.get("game_id") or "").strip() == key:
+            return str(v.get("user_id")), k, (v.get("game_id") if v.get("game_id") is not None else None)
+    return None, None, None
+
+def _map_set(username: str, user_id: Optional[str], game_id: Optional[str]) -> None:
+    if not username:
+        return
+    m = _map_load()
+    row = m.get(username) or {}
+    if user_id: row["user_id"] = str(user_id)
+    if game_id is not None: row["game_id"] = str(game_id)
+    m[username] = row
+    _map_save(m)
+
+# =============================================================================
+# Small utils
+# =============================================================================
+def _sleep(page, ms: int):
+    try: page.wait_for_timeout(ms)
+    except Exception: time.sleep(ms/1000.0)
+
+def _rand_username(seed: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9_]+", "", (seed or "user")).lower()[:10] or "u"
+    tag = "".join(random.choices(string.ascii_lowercase + string.digits, k=3))
+    u = f"{UN_PREFIX}{base}{tag}"
+    if not u.endswith(UN_SUFFIX):
+        u += UN_SUFFIX
+    return u
+
+def _clean(s: str) -> str:
+    return re.sub(r"\s+", "", (s or "").replace("\u00A0", " ")).strip().lower()
+
+# =============================================================================
+# Captcha helpers
+# =============================================================================
+def _focus_code_input(page) -> None:
+    if SEL_CAPTCHA_INPUT_FORCE:
+        try:
+            loc = page.locator(SEL_CAPTCHA_INPUT_FORCE).first
+            if loc and loc.is_visible(timeout=1200):
+                loc.focus()
+                return
+        except Exception:
+            pass
+    for sel in [
+        "form input[name*='verify']",
+        "form input[name*='code']",
+        "form input[name*='captcha']",
+        "form input[placeholder*='verification']",
+        "form input[placeholder*='Verification']",
+        "form input[placeholder*='code']",
+    ]:
+        try:
+            loc = page.locator(sel).first
+            if loc and loc.is_visible(timeout=800):
+                name = (loc.get_attribute("name") or "").lower()
+                ph   = (loc.get_attribute("placeholder") or "").lower()
+                if any(k in (name+ph) for k in ("user","username","account","login","password")):
+                    continue
+                loc.focus()
+                return
+        except Exception:
+            continue
+
+def _find_captcha_visual(page):
+    selector = SEL_CAPTCHA_IMG
+    deadline = time.time() + 8
+    last = None
+    while time.time() < deadline:
+        try:
+            loc = page.locator(selector).first
+            if loc and loc.is_visible(timeout=700):
+                return loc
+            last = loc
+        except Exception:
+            pass
+        _sleep(page, 150)
+    return last
+
+def _nearest_captcha_input(page, visual):
+    if SEL_CAPTCHA_INPUT_FORCE:
+        try:
+            forced = page.locator(SEL_CAPTCHA_INPUT_FORCE).first
+            if forced and forced.is_visible(timeout=700):
+                forced.focus()
+                return forced
+        except Exception:
+            pass
+    # Element-UI input-group (common case)
+    try:
+        group = visual.locator("xpath=ancestor::*[contains(@class,'el-input-group')][1]")
+        if group and group.count() > 0:
+            inp = group.locator("input[type='text'], input:not([type])").first
+            if inp and inp.is_visible(timeout=700):
+                inp.focus()
+                return inp
+    except Exception:
+        pass
+    # Immediate preceding input
+    try:
+        near = visual.locator("xpath=preceding::input[1]")
+        if near and near.is_visible(timeout=700):
+            name = (near.get_attribute("name") or "").lower()
+            ph   = (near.get_attribute("placeholder") or "").lower()
+            if not any(k in (name+ph) for k in ("user","username","account","login","password")):
+                near.focus()
+                return near
+    except Exception:
+        pass
+    # Fallback scan in form
+    try:
+        form = visual.locator("xpath=ancestor::form[1]")
+    except Exception:
+        form = page
+    inputs = form.locator("input[type='text'], input:not([type])")
+    try:
+        cnt = min(15, inputs.count())
+    except Exception:
+        cnt = 0
+    for i in range(cnt):
+        inp = inputs.nth(i)
+        try:
+            if not inp.is_visible(timeout=350):
+                continue
+            name = (inp.get_attribute("name") or "").lower()
+            ph   = (inp.get_attribute("placeholder") or "").lower()
+            if any(k in (name+ph) for k in ("user","username","account","login","password")):
+                continue
+            inp.focus()
+            return inp
+        except Exception:
+            continue
     return None
 
-def _ensure_user_id(vendor_user_id: Optional[str], username: Optional[str]) -> str:
-    uid = (vendor_user_id or "").strip()
-    if uid:
-        return uid
-    uid = _lookup_user_id_by_username(username)
-    if not uid:
-        raise RuntimeError("protocol param error: missing user_id (mapping/lookup failed)")
-    return uid
-
-# -------------------- API helpers --------------------
-def _post_gv(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    payload = GV._inject_agent(payload)
-    if TX_JSON:
-        return GV.request("POST", path, json=payload)
-    else:
-        return GV.request("POST", path, data=payload)
-
-def _ok(body: Any) -> bool:
-    if not isinstance(body, dict):
-        return False
-    code = body.get("code", body.get("status", None))
-    msg  = (body.get("msg") or body.get("message") or "").lower()
-    return (code in (0, 200, "0", "200")) or ("success" in msg)
-
-def _is_numeric(s: str) -> bool:
-    return bool(re.fullmatch(r"\d+", (s or "").strip()))
-
-# -------------------- Create / Credit / Redeem --------------------
-def create_user(username: str, password: Optional[str] = None) -> Dict[str, Any]:
-    # idempotent prefix/suffix
-    uname = (username or "").strip()
-    if GV_USERNAME_PREFIX and not uname.startswith(GV_USERNAME_PREFIX):
-        uname = GV_USERNAME_PREFIX + uname
-    if GV_USERNAME_SUFFIX and not uname.endswith(GV_USERNAME_SUFFIX):
-        uname = uname + GV_USERNAME_SUFFIX
-    payload = {"username": uname, "password": password or GV_DEFAULT_PASSWORD}
-    return _post_gv(CREATE_PATH, payload)
-
-def credit_recharge(inp: CreditInput) -> Dict[str, Any]:
-    uid_or_name = str(inp.user_id).strip()
-    amt_i  = int(float(inp.amount))
-    remark = inp.memo or ""
-    is_id  = _is_numeric(uid_or_name)
-
-    # Try most common field shapes first
-    variants = []
-
-    if is_id:
-        variants += [
-            {"userId": uid_or_name, "type": 1, "money": amt_i, "remark": remark},
-            {"uid": uid_or_name, "type": 1, "amount": amt_i, "remark": remark},
-            {"user_id": uid_or_name, "type": 1, "amount": amt_i, "memo": remark},
-            {"user_id": uid_or_name, "type": "recharge", "amount": amt_i, "memo": remark},
-        ]
-    else:
-        # username-based fallbacks (some panels accept these)
-        variants += [
-            {"loginName": uid_or_name, "type": 1, "amount": amt_i, "remark": remark},
-            {"username":  uid_or_name, "type": 1, "money": amt_i,  "remark": remark},
-            {"login_name":uid_or_name, "type": 1, "amount": amt_i, "memo":   remark},
-        ]
-
-    last = None
-    for p in variants:
-        try:
-            body = _post_gv(CREDIT_PATH, p)
-            last = body
-            if _ok(body):
-                return body
-        except Exception as e:
-            last = {"error": str(e)}
-            continue
-    # make error explicit to help debugging
-    return last or {"msg": "protocol param error", "status": 400}
-
-def credit_redeem(user_id: str, amount: float, memo: str = "") -> Dict[str, Any]:
-    uid_or_name = str(user_id).strip()
-    amt_i  = int(float(amount))
-    remark = memo or ""
-    is_id  = _is_numeric(uid_or_name)
-
-    variants = []
-    if is_id:
-        variants += [
-            {"userId": uid_or_name, "type": 2, "money": amt_i, "remark": remark},
-            {"uid": uid_or_name, "type": 2, "amount": amt_i, "remark": remark},
-            {"user_id": uid_or_name, "type": 2, "amount": amt_i, "memo": remark},
-            {"user_id": uid_or_name, "type": "redeem", "amount": amt_i, "memo": remark},
-        ]
-    else:
-        variants += [
-            {"loginName": uid_or_name, "type": 2, "amount": amt_i, "remark": remark},
-            {"username":  uid_or_name, "type": 2, "money": amt_i,  "remark": remark},
-            {"login_name":uid_or_name, "type": 2, "amount": amt_i, "memo":   remark},
-        ]
-
-    last = None
-    for p in variants:
-        try:
-            body = _post_gv(REDEEM_PATH, p)
-            last = body
-            if _ok(body):
-                return body
-        except Exception as e:
-            last = {"error": str(e)}
-            continue
-    return last or {"msg": "protocol param error", "status": 400}
-
-# ---------- Back-compat shims ----------
-def credit_deposit(inp: LegacyCreditInput) -> Dict[str, Any]:
-    uid = _ensure_user_id(inp.vendor_user_id, inp.username)
-    return credit_recharge(CreditInput(user_id=str(uid), amount=int(inp.amount),
-                                       memo=inp.note or inp.request_id, op_type="recharge"))
-
-def redeem_withdraw(inp: RedeemInput) -> Dict[str, Any]:
-    uid = _ensure_user_id(inp.vendor_user_id, inp.username)
-    return credit_redeem(str(uid), int(inp.amount), memo=inp.note or inp.request_id)
-
-class GameVaultClient:
-    def lookup_user_id(self, username: str) -> Optional[str]:
-        return _lookup_user_id_by_username(username)
-
-# -------------------- Misc API --------------------
-def user_list(page: int = 1, page_size: int = 1) -> Dict[str, Any]:
-    payload = {"page": page, "pageSize": page_size, "pageNum": page, "page_size": page_size}
-    payload = GV._inject_agent(payload)
-    if USERLIST_METHOD == "GET":
-        return GV.request("GET", USERLIST_PATH, params=payload)
-    else:
-        if TX_JSON:
-            return GV.request("POST", USERLIST_PATH, json=payload)
-        else:
-            return GV.request("POST", USERLIST_PATH, data=payload)
-
-def ping_ok() -> bool:
+def _get_captcha_bytes(page, ctx, vis):
+    # Try canvas
     try:
-        payload = {"page": 1, "pageSize": 1, "pageNum": 1, "page_size": 1}
-        payload = GV._inject_agent(payload)
-        if PING_METHOD == "GET":
-            body = GV.request("GET", PING_PATH, params=payload)
+        tag = (vis.evaluate("el => el.tagName") or "").lower()
+    except Exception:
+        tag = ""
+    if tag == "canvas":
+        try:
+            data_url = vis.evaluate("el => el.toDataURL('image/png')")
+            if isinstance(data_url, str) and data_url.startswith("data:image"):
+                return base64.b64decode(data_url.split(",",1)[1])
+        except Exception:
+            pass
+    # Try src / background url
+    src = ""
+    try: src = vis.get_attribute("src") or ""
+    except Exception: pass
+    if not src:
+        try:
+            style = vis.get_attribute("style") or ""
+            m = re.search(r"url\((['\"]?)(.+?)\1\)", style, re.I)
+            if m: src = m.group(2)
+        except Exception:
+            pass
+    if src.startswith("data:image/"):
+        return base64.b64decode(src.split(",",1)[1])
+    if src:
+        try:
+            abs_url = src if re.match(r"^https?://", src, re.I) else urljoin(page.url, src)
+            rsp = ctx.request.get(abs_url, timeout=TIMEOUT_MS/1000.0)
+            if rsp.ok:
+                return rsp.body()
+        except Exception:
+            pass
+    # Fallback screenshot
+    try:
+        return vis.screenshot()
+    except Exception:
+        return None
+
+# =============================================================================
+# Token extraction (response headers + storage) and login
+# =============================================================================
+def _extract_token_from_storages(page) -> str:
+    dump_js = """
+    () => {
+      const out = {local:{}, session:{}};
+      try { for (let i=0;i<localStorage.length;i++){const k=localStorage.key(i); out.local[k]=localStorage.getItem(k);} } catch(e){}
+      try { for (let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i); out.session[k]=sessionStorage.getItem(k);} } catch(e){}
+      return out;
+    }
+    """
+    store = page.evaluate(dump_js) or {"local":{}, "session":{}}
+    candidates: List[str] = []
+
+    def collect(v: str):
+        if not v: return
+        candidates.append(v)
+        try:
+            obj = json.loads(v)
+            if isinstance(obj, dict):
+                for key2 in ("token","Token","access_token","authorization","Authorization"):
+                    if obj.get(key2):
+                        candidates.append(str(obj.get(key2)))
+        except Exception:
+            pass
+
+    for scope in ("local","session"):
+        for _, v in (store.get(scope) or {}).items():
+            collect(v)
+
+    # Prefer JWT-like strings or long token-ish values
+    for c in candidates:
+        if "." in c and len(c) > 20:
+            return c.strip()
+    for c in candidates:
+        if len(c) >= 20 and re.search(r"[A-Za-z0-9\-_]{16,}", c):
+            return c.strip()
+
+    # Direct keys
+    for key in ("token","Token","authorization","Authorization","tokenInfo"):
+        if (store.get("local") or {}).get(key):   return (store["local"][key] or "").strip()
+        if (store.get("session") or {}).get(key): return (store["session"][key] or "").strip()
+    return ""
+
+def _login_get_token(force_refresh: bool = False) -> str:
+    global _TOKEN_CACHE
+    if _TOKEN_CACHE and not force_refresh:
+        return _TOKEN_CACHE
+
+    if not GV_USER or not GV_PASS:
+        raise RuntimeError("GV_USERNAME / GV_PASSWORD not set")
+    if not CAPTCHA_KEY:
+        raise RuntimeError("TWO_CAPTCHA_APIKEY / TWO_CAPTCHA_API_KEY not set")
+
+    headless = (os.getenv("GV_HEADLESS","false").lower() == "true")
+    slowmo   = int(os.getenv("GV_SLOWMO_MS","0") or "0")
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=headless, slow_mo=slowmo, args=["--no-sandbox"])
+        ctx = browser.new_context(viewport={"width":1366,"height":900}, user_agent=UA)
+        page = ctx.new_page()
+
+        # Capture tokens from /agentLogin responses if present
+        tokens_from_net: List[str] = []
+        def on_response(r: Response):
+            try:
+                if "/agent/agentLogin" in r.url:
+                    for hk in ("token","authorization","Authorization"):
+                        v = r.headers.get(hk)
+                        if v: tokens_from_net.append(v.strip().replace("Bearer ", "").replace("bearer ", ""))
+                    # Sometimes token is in JSON body
+                    try:
+                        data = r.json()
+                        if isinstance(data, dict):
+                            for k in ("token","Token","access_token","authorization","Authorization"):
+                                 v = (data.get("data") or {}).get(k) or data.get(k)
+                                 if v: tokens_from_net.append(str(v))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        page.on("response", on_response)
+
+        page.goto(LOGIN_URL, wait_until="load", timeout=TIMEOUT_MS)
+
+        try:
+            form = page.locator("form").first
+        except Exception:
+            form = page
+
+        # Fill username & password
+        try:
+            form.locator("input[type='text'], input:not([type])").first.fill(GV_USER)
+        except Exception:
+            page.locator("input").nth(0).fill(GV_USER)
+        form.locator("input[type='password']").first.fill(GV_PASS)
+
+        # Make sure captcha is visible, then fetch its image bytes
+        _focus_code_input(page)
+        visual = _find_captcha_visual(page)
+        if not visual:
+            raise RuntimeError("Captcha visual not found on login page")
+
+        png = _get_captcha_bytes(page, ctx, visual)
+        if not png:
+            raise RuntimeError("Could not fetch captcha image bytes")
+
+        code = solve_image_captcha(CAPTCHA_KEY, png)
+
+        # Fill the code into the input nearest to the captcha
+        target = _nearest_captcha_input(page, visual)
+        if target:
+            try: target.fill("")
+            except Exception: pass
+            target.type(code, delay=25)
         else:
-            if TX_JSON:
-                body = GV.request("POST", PING_PATH, json=payload)
-            else:
-                body = GV.request("POST", PING_PATH, data=payload)
-        code = str(body.get("code") if isinstance(body, dict) and "code" in body else body.get("status", ""))
-        if code in ("401", 401, "403", 403):
-            return False
-        return True
+            # Last resort: click image and type (focus follows)
+            try: visual.click(timeout=600)
+            except Exception: pass
+            page.keyboard.type(code, delay=25)
+
+        # Submit (button or Enter)
+        submitted = False
+        for sel in ("form button[type='submit']", "button[type='submit']"):
+            try:
+                form.locator(sel).first.click(timeout=1500)
+                submitted = True
+                break
+            except Exception:
+                pass
+        if not submitted:
+            for pat in (r"^\s*login\s*$", r"^\s*log\s*in\s*$", r"^\s*sign\s*in\s*$", r"^\s*submit\s*$"):
+                try:
+                    page.get_by_role("button", name=re.compile(pat, re.I)).click(timeout=1500)
+                    submitted = True
+                    break
+                except Exception:
+                    pass
+        if not submitted:
+            try:
+                form.locator("input[type='password']").first.press("Enter")
+                submitted = True
+            except Exception:
+                pass
+        if not submitted:
+            raise RuntimeError("Could not find login submit button")
+
+        # Wait for token to appear from network or storages
+        for _ in range(80):
+            if tokens_from_net:
+                _TOKEN_CACHE = tokens_from_net[-1].replace("Bearer ","").strip()
+                break
+            tok = _extract_token_from_storages(page)
+            if tok:
+                _TOKEN_CACHE = tok.replace("Bearer ","").strip()
+                break
+            # also wait until leaving /login (some tenants redirect fast)
+            if "/login" not in (page.url or "").lower():
+                tok2 = _extract_token_from_storages(page)
+                if tok2:
+                    _TOKEN_CACHE = tok2.replace("Bearer ","").strip()
+                    break
+            _sleep(page, 250)
+
+        ctx.close()
+        browser.close()
+
+    if not _TOKEN_CACHE:
+        raise RuntimeError("Login failed: token not found")
+    return _TOKEN_CACHE
+
+# =============================================================================
+# API helpers
+# =============================================================================
+def _post_api(path: str, token: str, payload: dict) -> dict:
+    url = f"{API_BASE}{path if path.startswith('/') else '/'+path}"
+
+    # Try JSON first
+    r = requests.post(url, headers=_api_headers(token, json_mode=True), json=payload, timeout=30)
+    try:
+        data = r.json()
+    except Exception:
+        data = {"code": r.status_code, "msg": r.text}
+
+    # If protocol/param errors, retry as form-urlencoded (seen on some tenants)
+    msg = (str(data.get("msg") or "")).lower()
+    if data.get("code") not in (200, "200") and ("protocol" in msg or "param" in msg):
+        r2 = requests.post(url, headers=_api_headers(token, json_mode=False), data=payload, timeout=30)
+        try:
+            data2 = r2.json()
+        except Exception:
+            data2 = {"code": r2.status_code, "msg": r2.text}
+        return data2
+
+    return data
+
+def _rows_from(data: dict) -> list:
+    """Normalize various {data/list} shapes into a list of rows."""
+    d = data or {}
+    if isinstance(d.get("data"), dict):
+        dd = d["data"]
+        if isinstance(dd.get("list"), list): return dd["list"]
+        if isinstance(dd, list):             return dd
+    if isinstance(d.get("data"), list):      return d["data"]
+    if isinstance(d.get("list"), list):      return d["list"]
+    for v in d.values():
+        if isinstance(v, list):              return v
+        if isinstance(v, dict) and isinstance(v.get("list"), list):
+            return v["list"]
+    return []
+
+def _ensure_user_api(token: str, key: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return (user_id, account_username, game_id) by searching multiple payload variants."""
+    key_clean = _clean(key)
+    if not key_clean:
+        return None, None, None
+
+    # Primary tries (username / game_id filters + common variants)
+    queries = [
+        {"account": key, "page": 1, "limit": 20, "locale": "en", "timezone": "cst"},
+        {"account": key_clean, "page": 1, "limit": 20, "locale": "en", "timezone": "cst"},
+        {"searchType": "account", "searchContent": key, "page": 1, "limit": 20, "locale": "en", "timezone": "cst"},
+        {"searchType": 1, "searchContent": key, "page": 1, "limit": 20, "locale": "en", "timezone": "cst"},
+        {"accountName": key, "pageIndex": 1, "pageSize": 20, "locale": "en", "timezone": "cst"},
+        {"game_id": key, "page": 1, "limit": 20, "locale": "en", "timezone": "cst"},
+        {"gameId": key, "pageIndex": 1, "pageSize": 20, "locale": "en", "timezone": "cst"},
+    ]
+    for q in queries:
+        data = _post_api("/user/userList", token, q)
+        for row in _rows_from(data):
+            acc   = _clean(row.get("account") or row.get("user_name") or "")
+            gid   = _clean(str(row.get("game_id") or row.get("gameid") or row.get("gameId") or ""))
+            uid   = str(row.get("user_id") or row.get("id") or "").strip()
+            if acc == key_clean or (gid and gid == key_clean):
+                return uid, (row.get("account") or row.get("user_name") or ""), (row.get("game_id") or row.get("gameid") or row.get("gameId") or "")
+
+    # Wide scan (paged)
+    for page_key in ("page", "pageIndex"):
+        for size_key in ("limit", "pageSize", "pagesize"):
+            payload = {"locale": "en", "timezone": "cst"}
+            payload[page_key] = 1
+            payload[size_key] = 100
+            for page in range(1, 101):
+                payload[page_key] = page
+                data = _post_api("/user/userList", token, payload)
+                rows = _rows_from(data)
+                if not rows:
+                    break
+                for row in rows:
+                    acc = _clean(row.get("account") or row.get("user_name") or "")
+                    gid = _clean(str(row.get("game_id") or row.get("gameid") or row.get("gameId") or ""))
+                    uid = str(row.get("user_id") or row.get("id") or "").strip()
+                    if acc == key_clean or (gid and gid == key_clean):
+                        return uid, (row.get("account") or row.get("user_name") or ""), (row.get("game_id") or row.get("gameid") or row.get("gameId") or "")
+                if len(rows) < int(payload[size_key]):
+                    break
+    return None, None, None
+
+def _ensure_user(token: str, username_or_gid: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """1) Try local map, 2) fall back to API lookup, and persist on success."""
+    uid, acc, gid = _map_get(username_or_gid)
+    if uid:
+        return uid, acc, gid
+    uid, acc, gid = _ensure_user_api(token, username_or_gid)
+    if uid:
+        _map_set(acc, uid, gid)
+    return uid, acc, gid
+
+# =============================================================================
+# Public API
+# =============================================================================
+def gv_create_account(display_name: str, email: str = "") -> Dict:
+    """
+    Create a player via API using a token obtained through UI login + 2Captcha.
+    Returns { ok, username, password, user_id? } or { ok: False, error }.
+    Auto-retries once with a randomized username if "login name have used".
+    """
+    try:
+        token = _login_get_token()
+
+        # normalize desired username (respect provided if valid, else random)
+        base = re.sub(r"[^A-Za-z0-9_]+", "", display_name or "User")
+        username = base if re.match(r"^[A-Za-z0-9_]{3,}$", base or "") else _rand_username(display_name)
+        if not username.endswith(UN_SUFFIX):
+            username = f"{UN_PREFIX}{username}{UN_SUFFIX}"
+
+        def _attempt_create(uname: str) -> dict:
+            payload = {
+                "account": uname,
+                "nickname": (display_name.split("_",1)[0] or display_name or "User")[:13],
+                "rechargeamount": "",
+                "login_pwd": DEF_PASS,
+                "check_pwd": DEF_PASS,
+                "captcha": None,
+                "locale": "en",
+                "timezone": "cst",
+                "t": "",
+            }
+            return _post_api("/user/addUser", token, payload)
+
+        data = _attempt_create(username)
+
+        # Handle "name used" by retrying once with randomized username
+        msg_text = (data.get("msg") or "").lower()
+        if data.get("code") == 200 and ((data.get("data") or {}).get("retcode") in (0, "0")):
+            user_id = str((data["data"].get("user_id") or "")).strip()
+            if user_id:
+                _map_set(username, user_id, None)
+            return {"ok": True, "username": username, "password": DEF_PASS, "user_id": user_id or None}
+        elif "login name have used" in msg_text or "already exists" in msg_text:
+            username2 = _rand_username(display_name)
+            data2 = _attempt_create(username2)
+            if data2.get("code") == 200:
+                dd = data2.get("data") or {}
+                user_id = str(dd.get("user_id") or "").strip()
+                if user_id:
+                    _map_set(username2, user_id, None)
+                return {"ok": True, "username": username2, "password": DEF_PASS, "user_id": user_id or None}
+
+        # Other success shapes
+        if data.get("code") == 200:
+            dd = data.get("data") or {}
+            if isinstance(dd, dict):
+                user_id = str(dd.get("user_id") or dd.get("id") or "").strip()
+                if user_id:
+                    _map_set(username, user_id, None)
+                    return {"ok": True, "username": username, "password": DEF_PASS, "user_id": user_id}
+                if dd.get("retcode") in (0, "0"):
+                    _map_set(username, None, None)
+                    return {"ok": True, "username": username, "password": DEF_PASS, "user_id": None}
+
+        return {"ok": False, "error": data.get("msg") or (data.get("data") or {}).get("error_en") or "Create failed"}
     except Exception as e:
-        log.warning("GameVault ping failed: %s", e)
-        return False
+        return {"ok": False, "error": str(e)}
+
+def gv_credit(username_or_gameid: str, amount: float, note: str = "") -> Dict:
+    """
+    Credit (recharge) a player's balance using the same UI-login token flow.
+    Accepts username or game_id. Uses local map first, then API lookup.
+    """
+    try:
+        token = _login_get_token()
+        uid, acc, gid = _ensure_user(token, username_or_gameid)
+        if not uid:
+            return {"ok": False, "error": f"user not found: {username_or_gameid}"}
+
+        payload = {
+            "user_id": str(uid),
+            "type": 1,  # recharge
+            "account": acc,
+            "balance": 0,
+            "amount": str(int(float(amount))),
+            "remark": note or "",
+            "locale": "en",
+            "timezone": "cst",
+        }
+
+        data = _post_api("/user/rechargeRedeem", token, payload)
+        if data.get("code") == 200:
+            bal = (data.get("data") or {}).get("Balance")
+            _map_set(acc, uid, gid)  # keep map fresh
+            return {"ok": True, "balance": bal, "account": acc, "game_id": gid}
+        return {"ok": False, "error": data.get("msg") or "recharge failed"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def gv_redeem(username_or_gameid: str, amount: float, note: str = "") -> Dict:
+    """
+    Redeem (withdraw) a player's balance using the same UI-login token flow.
+    Accepts username or game_id. Uses local map first, then API lookup.
+    """
+    try:
+        token = _login_get_token()
+        uid, acc, gid = _ensure_user(token, username_or_gameid)
+        if not uid:
+            return {"ok": False, "error": f"user not found: {username_or_gameid}"}
+
+        payload = {
+            "user_id": str(uid),
+            "type": 2,  # redeem
+            "account": acc,
+            "balance": 0,
+            "amount": str(int(float(amount))),
+            "remark": note or "",
+            "locale": "en",
+            "timezone": "cst",
+        }
+
+        data = _post_api("/user/rechargeRedeem", token, payload)
+        if data.get("code") == 200:
+            bal = (data.get("data") or {}).get("Balance")
+            _map_set(acc, uid, gid)
+            return {"ok": True, "balance": bal, "account": acc, "game_id": gid}
+        return {"ok": False, "error": data.get("msg") or "redeem failed"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+# Handy manual mapping helper: call this once if you already know ids.
+def gv_map_user(username: str, user_id: str, game_id: Optional[str] = None) -> Dict:
+    try:
+        _map_set(username, user_id, game_id)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+# =============================================================================
+# Optional terminal test
+# =============================================================================
+if __name__ == "__main__":
+    print("=== CREATE ===")
+    res = gv_create_account("TestUser123", "test@example.com")
+    print(json.dumps(res, indent=2))
+    if res.get("ok"):
+        u = res["username"]
+        print("\n=== CREDIT (1) ===")
+        print(json.dumps(gv_credit(u, 1, "autotest credit"), indent=2))
+        print("\n=== REDEEM (1) ===")
+        print(json.dumps(gv_redeem(u, 1, "autotest redeem"), indent=2))
