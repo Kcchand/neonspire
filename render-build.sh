@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- System dependencies needed by Chromium / Playwright ---
+# 1) OS packages for Chromium
 apt-get update
 apt-get install -y --no-install-recommends \
   libnss3 libxss1 libasound2 libatk1.0-0 libatk-bridge2.0-0 \
@@ -10,12 +10,14 @@ apt-get install -y --no-install-recommends \
   libcairo2 libgtk-3-0 fonts-liberation \
   ca-certificates curl wget xz-utils
 
-# --- Python dependencies ---
+# 2) Install Python deps
 pip install -r requirements.txt
 
-# --- Playwright browser installation ---
+# 3) Configure Playwright path for Render
 export PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright
+
+# 4) Install Chromium
 python -m playwright install --with-deps chromium
 
-# --- Optional cleanup to save build space ---
+# Optional cleanup
 pip cache purge || true
