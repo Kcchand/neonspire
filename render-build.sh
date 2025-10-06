@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Make sure pip can install on Render's PEP 668 image
+echo "🔧 Installing Python dependencies..."
 python3 -m pip install --upgrade pip --break-system-packages
 python3 -m pip install -r requirements.txt --no-cache-dir --break-system-packages
 
-# Put user-local scripts (gunicorn, playwright, etc.) on PATH
+# Fix PATH so Render can find playwright/gunicorn later
 export PATH="$PATH:/opt/render/.local/bin"
 
-# Tell Playwright where to cache the browser, and install Chromium
+# Set Playwright cache location
 export PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright
-python3 -m playwright install --with-deps chromium
 
-echo "✅ Build finished"
+# ✅ Install only Chromium (no system packages)
+echo "🌐 Installing Playwright Chromium..."
+python3 -m playwright install chromium --force
+
+echo "✅ Build complete!"
