@@ -18,8 +18,7 @@ python-dotenv==1.0.1
 
 # --- Realtime (SocketIO)
 Flask-SocketIO==5.3.6
-eventlet==0.36.1
-greenlet==3.1.1
+
 
 # --- Server
 gunicorn==22.0.0
