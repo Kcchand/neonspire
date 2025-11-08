@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>📥 Step 2 — Pay using {{ method.capitalize() }} & attach proof</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Deposit — Step 2</div>
+      <div class="muted">
+        Amount: <strong>${{ amount }}</strong>
+        {% if game %} • Game: <strong>{{ game.name }}</strong>{% endif %}
+        • Method: <strong>{{ method.capitalize() }}</strong>
+      </div>
+    </div>
+
+    <div class="method-row">
+      {% if method == 'CASHAPP' %}
+        <!-- CASH APP -->
+        <div class="method">
+          <div class="method-title">Cash App</div>
+
+          {% if settings and (settings.cashapp_handle or settings.cashapp_pay_url) %}
+            {% if settings.cashapp_handle %}
+              <div class="muted" style="margin-bottom:6px">Cash App $Cashtag:</div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <input id="copyCashApp" class="input" style="flex:1; min-width:280px"
+                       value="{{ settings.cashapp_handle }}" readonly>
+                <button class="btn" type="button" onclick="copyPayField('copyCashApp')">Copy</button>
+                {% if settings.cashapp_pay_url %}
+                  <a class="btn btn-primary" href="{{ settings.cashapp_pay_url }}" target="_blank" rel="noopener">
+                    Pay now
+                  </a>
+                {% endif %}
+              </div>
+            {% elif settings.cashapp_pay_url %}
+              <a class="btn btn-primary" href="{{ settings.cashapp_pay_url }}" target="_blank" rel="noopener">
+                Open Cash App payment
+              </a>
+            {% endif %}
+          {% endif %}
+
+          {% if settings and settings.cashapp_qr_url %}
+            <img class="qr" src="{{ settings.cashapp_qr_url }}" alt="Cash App QR" style="margin-top:10px">
+          {% endif %}
+
+          <div class="muted" style="margin-top:10px">
+            After you press <strong>Proceed</strong>, we’ll prepare your Cash App payment and may redirect you to the payment page.
+            You can also attach a screenshot below (optional).
+          </div>
+        </div>
+
+      {% elif method == 'CRYPTO' %}
+        <!-- CRYPTO -->
+        <div class="method">
+          <div class="method-title">Crypto</div>
+
+          {% if settings and settings.crypto_wallet_text %}
+            <div class="muted" style="margin-bottom:6px">Wallet USDT-TRC20:</div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <input id="copyCrypto" class="input" style="flex:1; min-width:280px"
+                     value="{{ settings.crypto_wallet_text }}" readonly>
+              <button class="btn" type="button" onclick="copyPayField('copyCrypto')">Copy</button>
+
+              {% if settings.crypto_pay_url %}
+                <a class="btn btn-primary" href="{{ settings.crypto_pay_url }}" target="_blank" rel="noopener">
+                  Pay now
+                </a>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {% if settings and settings.crypto_qr_url %}
+            <img class="qr" src="{{ settings.crypto_qr_url }}" alt="Crypto QR" style="margin-top:10px">
+          {% endif %}
+        </div>
+
+      {% else %}
+        <!-- CHIME -->
+        <div class="method">
+          <div class="method-title">Chime</div>
+
+          {% if settings and settings.chime_handle %}
+            <div class="muted" style="margin-bottom:6px">Handle:</div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <input id="copyChime" class="input" style="flex:1; min-width:280px"
+                     value="{{ settings.chime_handle }}" readonly>
+              <button class="btn" type="button" onclick="copyPayField('copyChime')">Copy</button>
+
+              {% if settings.chime_pay_url %}
+                <a class="btn btn-primary" href="{{ settings.chime_pay_url }}" target="_blank" rel="noopener">
+                  Pay now
+                </a>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {% if settings and settings.chime_qr_url %}
+            <img class="qr" src="{{ settings.chime_qr_url }}" alt="Chime QR" style="margin-top:10px">
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- File upload + details form -->
+    <form class="form-grid" method="post" action="{{ url_for('playerbp.deposit_submit') }}"
+          enctype="multipart/form-data" style="margin-top:14px">
+      <input type="hidden" name="amount" value="{{ amount }}">
+      <input type="hidden" name="method" value="{{ method }}">
+      <input type="hidden" name="game_id" value="{{ game.id if game else '' }}">
+
+      <!-- Direct image upload -->
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="proofFile">Upload Proof/Screenshot (PNG/JPG/WEBP)</label>
+        <input id="proofFile" name="proof_file" type="file" accept=".png,.jpg,.jpeg,.webp">
+        <div class="muted" style="margin-top:4px">
+          Attach your payment screenshot. For Cash App, you may skip this if you’ll be redirected automatically.
+        </div>
+      </div>
+
+      <!-- Optional proof URL -->
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="proofUrl">Payment Proof (URL)</label>
+        <input id="proofUrl" name="proof_url" type="url" placeholder="Paste a link to your payment proof (optional)">
+      </div>
+
+      <!-- NEW: payer name -->
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="payer_name">Account name</label>
+        <input
+          id="payer_name"
+          name="payer_name"
+          type="text"
+          class="input"
+          placeholder="Name on Chime / wallet owner name"
+        >
+      </div>
+
+      <!-- NEW: payer details (chime / wallet / txid) -->
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="payer_details">
+          Details (Chime handle, wallet address, or TXID)
+        </label>
+        <input
+          id="payer_details"
+          name="payer_details"
+          type="text"
+          class="input"
+          placeholder="Chime tag, crypto address, or transaction ID"
+        >
+      </div>
+
+      <div class="form-actions" style="grid-column:1/-1;display:flex;gap:10px;justify-content:flex-end">
+        <a class="btn btn-ghost" href="{{ url_for('playerbp.deposit_step1', game_id=(game.id if game else None)) }}">Back</a>
+        <button class="btn btn-primary" type="submit">Proceed</button>
+      </div>
+    </form>
+  </div>
+
+</div>
+
+<script>
+  async function copyPayField(id) {
+    try {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.select();
+      el.setSelectionRange(0, 99999);
+      await navigator.clipboard.writeText(el.value);
+      showToast('Copied to clipboard');
+    } catch (e) {
+      showToast('Copy failed — select & press Ctrl/Cmd+C');
+    }
+  }
+
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = `
+      position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+      background: #1f2937; color: #e5e7eb; padding: 10px 14px; border-radius: 8px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.35); z-index: 9999; font-size: 14px;
+    `;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 1800);
+  }
+</script>
+{% endblock %}

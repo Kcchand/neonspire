@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="hero" style="padding-bottom:0">
+  <div class="hero__title">Welcome back</div>
+  <div class="hero__subtitle">Sign in to access your wallet, games, and notifications.</div>
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  /* Scoped styles just for the auth cards */
+  .auth-wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}
+  .auth-card{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
+             border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px;
+             box-shadow:0 14px 40px rgba(0,0,0,.35)}
+  .auth-side{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
+             border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px}
+  .auth-title{font-size:26px;margin:0 0 2px 0}
+  .auth-sub{color:#9aa3c2;margin:0 0 14px 0}
+  .fg{display:grid;gap:8px;margin-bottom:12px}
+  .fg label{color:#9aa3c2;font-size:13px}
+  .fg input{background:#11162a;border:1px solid rgba(255,255,255,.1);color:#e7ecff;
+            padding:12px;border-radius:12px;outline:none}
+  .fg input:focus{border-color:rgba(18,217,161,.45);box-shadow:0 0 0 6px rgba(18,217,161,.08)}
+  .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+  .muted{color:#9aa3c2}
+  .btn-wide{width:100%;font-weight:700}
+  .list{margin:8px 0 0 0;padding:0}
+  .list li{list-style:none;display:flex;gap:10px;align-items:flex-start;margin:8px 0}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
+         font-size:12px;border:1px solid rgba(255,255,255,.12)}
+  .badge-primary{background:linear-gradient(180deg,#12d9a1,#0fb98a);color:#041813;border:none}
+  @media (max-width:900px){.auth-wrap{grid-template-columns:1fr}}
+</style>
+
+<div class="auth-wrap">
+  <!-- Left: Login form (no local flash rendering — base.html handles it) -->
+  <div class="auth-card">
+    <h1 class="auth-title">Sign In</h1>
+    <p class="auth-sub">Enter your credentials to continue.</p>
+
+    <form method="post" action="{{ url_for('auth.login_post') }}" class="auth-form">
+      <!-- keep next param so we can redirect after successful login -->
+      <input type="hidden" name="next" value="{{ request.args.get('next','') }}">
+
+      <div class="fg">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required>
+      </div>
+
+      <div class="fg">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required>
+      </div>
+
+      <div class="row" style="margin:6px 0 10px 0">
+        <label class="muted" style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" name="remember" value="1" style="accent-color:#12d9a1">
+          Remember me
+        </label>
+        <a class="muted" href="{{ url_for('auth.forgot_get') }}">Forgot?</a>
+      </div>
+
+      <button class="btn btn-primary btn-wide" type="submit">Sign In</button>
+    </form>
+
+    <p class="muted" style="margin-top:12px">New here?
+      <a href="{{ url_for('auth.register_get') }}" style="color:#12d9a1;text-decoration:none">Create an account</a>
+    </p>
+  </div>
+
+  <!-- Right: Brand / Highlights -->
+  <aside class="auth-side">
+    <div class="badge badge-primary">Casino Grade • Secure</div>
+    <h3 style="margin:12px 0 6px 0">Why players love us</h3>
+    <ul class="list">
+      <li>⚡ Instant gameplay onboarding</li>
+      <li>🎁 Smart bonus engine and promos</li>
+      <li>🔔 Real-time notifications</li>
+      <li>🛡️ Secure wallet management</li>
+    </ul>
+
+    <div class="card card-glass" style="margin-top:12px">
+      <div class="h4">Need an account?</div>
+      <div class="muted">Sign up and start in under a minute.</div>
+      <a class="btn btn-ghost" style="margin-top:10px" href="{{ url_for('auth.register_get') }}">Create Account</a>
+    </div>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="hero">
+  <div class="hero__title">Employees</div>
+  <div class="hero__subtitle">Create staff accounts and review the roster</div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell grid" style="grid-template-columns:1fr 1fr; gap:16px">
+
+  <!-- Create Employee -->
+  <div class="panel">
+    <div class="panel-head"><div class="h3">Create Employee</div></div>
+    <form method="post" action="{{ url_for('adminbp.admin_users') }}" class="grid" style="gap:10px">
+      <label>Name
+        <input class="input" name="name" required>
+      </label>
+      <label>Email
+        <input class="input" name="email" type="email" required>
+      </label>
+      <label>Password
+        <input class="input" name="password" type="password" required>
+      </label>
+      <button class="btn btn-primary">Create</button>
+    </form>
+  </div>
+
+  <!-- Current Employees -->
+  <div class="panel">
+    <div class="panel-head"><div class="h3">Current Employees</div></div>
+
+    <div class="table">
+      <div class="tr th">
+        <div>Name</div>
+        <div>Email</div>
+        <div>Status</div>
+        <div>Created</div>
+        <div class="right">Actions</div>
+      </div>
+
+      {% for e in employees %}
+        {% set enabled =
+          (e.is_active if e.is_active is defined else
+            (e.active if e.active is defined else (e.role != 'DISABLED')))
+        %}
+        <div class="tr" style="align-items:center;">
+          <div>{{ e.name or '—' }}</div>
+          <div>{{ e.email }}</div>
+          <div>
+            {% if enabled %}
+              <span class="pill" style="background:rgba(18,217,161,.12);border:1px solid rgba(18,217,161,.35)">Enabled</span>
+            {% else %}
+              <span class="pill" style="background:rgba(255,93,93,.12);border:1px solid rgba(255,93,93,.35)">Disabled</span>
+            {% endif %}
+          </div>
+          <div class="mono">{{ e.created_at or '—' }}</div>
+
+          <div class="right" style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end">
+            <!-- Enable/Disable -->
+            {% if enabled %}
+              <form method="post" action="{{ url_for('adminbp.admin_disable_employee', user_id=e.id) }}"
+                    onsubmit="return confirm('Disable this employee account?');">
+                <button class="btn btn-ghost" type="submit">Disable</button>
+              </form>
+            {% else %}
+              <form method="post" action="{{ url_for('adminbp.admin_enable_employee', user_id=e.id) }}">
+                <button class="btn btn-primary" type="submit">Enable</button>
+              </form>
+            {% endif %}
+
+            <!-- Change Password -->
+            <form method="post" action="{{ url_for('adminbp.admin_change_employee_password', user_id=e.id) }}"
+                  class="inline-form" style="display:flex; gap:6px; align-items:center">
+              <input name="new_password" class="input" type="password" placeholder="New password" required style="min-width:180px">
+              <button class="btn btn-ghost" type="submit">Change</button>
+            </form>
+          </div>
+        </div>
+      {% else %}
+        <div class="muted" style="padding:10px">No employees yet.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

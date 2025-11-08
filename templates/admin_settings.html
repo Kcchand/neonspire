@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="shell" style="display:flex;flex-direction:column;gap:14px">
+
+  <!-- Header / Shortcuts -->
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div class="h3" style="font-size:20px">⚙️ Admin Settings</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a class="btn chip-btn" href="{{ url_for('adminbp.admin_home') }}">Overview</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.games_list') }}">Manage Games</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
+    </div>
+  </div>
+
+  <!-- Add Funds methods -->
+  <div class="panel">
+    <div class="h3">💳 Add Funds — Methods</div>
+    <p class="muted" style="margin:6px 0 14px">
+      Configure the text/handle and optional QR images your players will see when depositing.
+    </p>
+
+    <div class="method-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <!-- Crypto -->
+      <div class="card" style="padding:14px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+        <div class="method-title" style="font-weight:700;margin-bottom:8px">Crypto</div>
+        <form method="post" action="{{ url_for('adminbp.update_crypto_qr') }}" enctype="multipart/form-data">
+          <label class="muted" for="crypto_wallet_text">Wallet / Address (shown to players)</label>
+          <textarea id="crypto_wallet_text" name="crypto_wallet_text" rows="2" class="input"
+                    placeholder="USDT-TRC20: TX...">{{ settings.crypto_wallet_text if settings else '' }}</textarea>
+
+          <!-- NEW: Direct Pay Link (optional) -->
+          <div class="form-group" style="margin-top:10px">
+            <label class="muted" for="crypto_pay_url">Direct Pay Link (optional)</label>
+            <input id="crypto_pay_url"
+                   name="crypto_pay_url"
+                   type="url"
+                   class="input"
+                   value="{{ settings.crypto_pay_url or '' }}"
+                   placeholder="https://your-processor.example/pay?addr=...">
+            <div class="muted" style="font-size:12px;margin-top:6px">
+              If set, players will see a “Pay with Crypto” button that opens this link.
+            </div>
+          </div>
+
+          <!-- Deposit QR -->
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="crypto_qr">QR Image (optional)</label>
+              <input id="crypto_qr" type="file" name="crypto_qr" accept="image/*" class="input">
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG/WEBP up to ~5MB</div>
+            </div>
+            {% if settings and settings.crypto_qr_url %}
+              <img src="{{ settings.crypto_qr_url }}" alt="Crypto QR" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--stroke)">
+            {% endif %}
+          </div>
+
+          <!-- 🔹 NEW: Withdraw – Crypto (payout) -->
+          <hr style="border:none;border-top:1px solid rgba(255,255,255,.06);margin:14px 0;">
+          <div class="h5" style="font-weight:600;margin-bottom:8px;font-size:13px;">Withdraw — Crypto (Payout)</div>
+
+          <div class="form-group">
+            <label class="muted" for="withdraw_crypto_address">Payout Crypto Address (our wallet)</label>
+            <input id="withdraw_crypto_address"
+                   name="withdraw_crypto_address"
+                   type="text"
+                   class="input"
+                   value="{{ settings.withdraw_crypto_address or '' }}"
+                   placeholder="USDT-TRC20: YOUR_WITHDRAW_WALLET">
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="withdraw_crypto_qr_file">Payout Crypto QR (shown on Withdraw page)</label>
+              <input id="withdraw_crypto_qr_file" type="file" name="withdraw_crypto_qr_file" accept="image/*" class="input">
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG/WEBP up to ~5MB</div>
+            </div>
+            {% if settings and settings.withdraw_crypto_qr_url %}
+              <img src="{{ settings.withdraw_crypto_qr_url }}" alt="Withdraw Crypto QR"
+                   style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--stroke)">
+            {% endif %}
+          </div>
+
+          <div style="margin-top:12px"><button class="btn btn-primary" type="submit">Save Crypto</button></div>
+        </form>
+      </div>
+
+      <!-- Chime -->
+      <div class="card" style="padding:14px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+        <div class="method-title" style="font-weight:700;margin-bottom:8px">Chime</div>
+        <form method="post" action="{{ url_for('adminbp.update_chime_qr') }}" enctype="multipart/form-data">
+          <label class="muted" for="chime_handle">Chime Handle (shown to players)</label>
+          <textarea id="chime_handle" name="chime_handle" rows="2" class="input"
+                    placeholder="@your-chime">{{ settings.chime_handle if settings else '' }}</textarea>
+
+          <!-- NEW: Direct Pay Link (optional) -->
+          <div class="form-group" style="margin-top:10px">
+            <label class="muted" for="chime_pay_url">Direct Pay Link (optional)</label>
+            <input id="chime_pay_url"
+                   name="chime_pay_url"
+                   type="url"
+                   class="input"
+                   value="{{ settings.chime_pay_url or '' }}"
+                   placeholder="https://chime.me/pay/your-handle">
+            <div class="muted" style="font-size:12px;margin-top:6px">
+              If set, players will see a “Pay with Chime” button that opens this link.
+            </div>
+          </div>
+
+          <!-- Deposit QR -->
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="chime_qr">QR Image (optional)</label>
+              <input id="chime_qr" type="file" name="chime_qr" accept="image/*" class="input">
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG/WEBP up to ~5MB</div>
+            </div>
+            {% if settings and settings.chime_qr_url %}
+              <img src="{{ settings.chime_qr_url }}" alt="Chime QR" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--stroke)">
+            {% endif %}
+          </div>
+
+          <!-- 🔹 NEW: Withdraw – Chime (payout) -->
+          <hr style="border:none;border-top:1px solid rgba(255,255,255,.06);margin:14px 0;">
+          <div class="h5" style="font-weight:600;margin-bottom:8px;font-size:13px;">Withdraw — Chime (Payout)</div>
+
+          <div class="form-group">
+            <label class="muted" for="withdraw_chime_handle">Payout Chime Handle (our handle)</label>
+            <input id="withdraw_chime_handle"
+                   name="withdraw_chime_handle"
+                   type="text"
+                   class="input"
+                   value="{{ settings.withdraw_chime_handle or '' }}"
+                   placeholder="$YourChimeHandle">
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="withdraw_chime_qr_file">Payout Chime QR (shown on Withdraw page)</label>
+              <input id="withdraw_chime_qr_file" type="file" name="withdraw_chime_qr_file" accept="image/*" class="input">
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG/WEBP up to ~5MB</div>
+            </div>
+            {% if settings and settings.withdraw_chime_qr_url %}
+              <img src="{{ settings.withdraw_chime_qr_url }}" alt="Withdraw Chime QR"
+                   style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--stroke)">
+            {% endif %}
+          </div>
+
+          <div style="margin-top:12px"><button class="btn btn-primary" type="submit">Save Chime</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Withdrawal limits -->
+  <div class="panel">
+    <div class="h3">💵 Withdrawal Limits</div>
+    <form method="post" action="{{ url_for('adminbp.update_limits') }}">
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:12px;align-items:end">
+        <div>
+          <label class="muted" for="min_redeem">Min Withdraw</label>
+          <input id="min_redeem" name="min_redeem" type="number" class="input" placeholder="e.g. 50"
+                 value="{{ settings.min_redeem if settings and settings.min_redeem is not none else '' }}">
+        </div>
+        <div>
+          <label class="muted" for="max_redeem">Max Withdraw</label>
+          <input id="max_redeem" name="max_redeem" type="number" class="input" placeholder="e.g. 500"
+                 value="{{ settings.max_redeem if settings and settings.max_redeem is not none else '' }}">
+        </div>
+      </div>
+      <div style="margin-top:12px"><button class="btn btn-primary" type="submit">Save Limits</button></div>
+    </form>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,1454 @@
+# telegram_bot.py
+"""
+NeonSpire Staff Bot
+===================
+
+Telegram staff panel for your casino dashboard.
+
+- show dashboard counters
+- list + approve/reject deposits
+- provider-based "approve & credit" (juwa/gv/milkyway/vblink/ultrapanda)
+- list + redeem/paid withdrawals
+- list + approve/reject game-account requests
+- list recent players
+- 🔔 auto-poll DB and push NEW deposits/withdrawals/requests to staff
+- 💬 support inbox (reads from kv_store -> 'support:inbox' same as employee dashboard)
+"""
+
+import os
+import json
+import logging
+from datetime import datetime
+
+from dotenv import load_dotenv
+
+load_dotenv(".env")
+
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ParseMode,
+)
+from telegram.ext import (
+    Updater,
+    CallbackContext,
+    CommandHandler,
+    CallbackQueryHandler,
+)
+
+# ---- Flask app + models -----------------------------
+from app import app as flask_app
+from models import (
+    db,
+    User,
+    Game,
+    PlayerBalance,
+    GameAccount,
+    GameAccountRequest,
+    DepositRequest,
+    WithdrawRequest,
+    PaymentSettings,
+    notify,
+)
+
+# 👇 we need this to read from kv_store like employee dashboard
+from sqlalchemy import text
+
+# unified provider facade
+from automation.providers import (
+    detect_vendor,
+    provider_credit,
+    provider_redeem,
+    provider_auto_create,
+    result_ok as _prov_ok,
+    result_error_text as _prov_err,
+)
+
+# --------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+log = logging.getLogger("tg.staff")
+
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_NAME = os.getenv("TELEGRAM_BOT_NAME", "NeonSpire Staff Bot")
+
+_raw_staff = os.getenv("TELEGRAM_STAFF_IDS", "")
+STAFF_IDS = {int(x.strip()) for x in _raw_staff.split(",") if x.strip().isdigit()}
+
+PAGE_SIZE = 10
+STATE_FILE = ".tg_staff_state.json"
+
+
+# ================== STATE HELPERS ==================
+def load_state() -> dict:
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_state(state: dict):
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, default=str)
+    except Exception as e:
+        log.warning("could not save state: %s", e)
+
+
+# ================== UI HELPERS ==================
+def _ack_working(q):
+    """always show instant toast so staff knows tap was received."""
+    try:
+        q.answer("⏳ Working…", show_alert=False)
+    except Exception:
+        pass
+
+
+def _send_progress_msg(bot, chat_id: int, text: str) -> int:
+    msg = bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+    return msg.message_id
+
+
+def _set_loading_keyboard(q, label: str = "⏳ Working…"):
+    try:
+        q.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton(label, callback_data="noop")]]
+            )
+        )
+    except Exception as e:
+        log.debug("cannot edit keyboard to loading: %s", e)
+
+
+def _set_loading(q, text: str):
+    try:
+        q.edit_message_text(text=text, parse_mode=ParseMode.MARKDOWN)
+        return
+    except Exception:
+        pass
+    try:
+        q.message.edit_text(text=text, parse_mode=ParseMode.MARKDOWN)
+        return
+    except Exception:
+        pass
+    try:
+        q.bot.edit_message_text(
+            chat_id=q.message.chat_id,
+            message_id=q.message.message_id,
+            text=text,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    except Exception as e:
+        log.warning("cannot show loading text: %s", e)
+        try:
+            q.answer("Processing…", show_alert=False)
+        except Exception:
+            pass
+
+
+# ================== SUPPORT HELPERS ==================
+def _read_support_inbox() -> list[dict]:
+    """
+    Read support inbox from the same place employee dashboard uses:
+    kv_store -> key = 'support:inbox'
+    We do NOT change the dashboard. We just read the same JSON.
+    """
+    with flask_app.app_context():
+        try:
+            row = db.session.execute(
+                text("SELECT value FROM kv_store WHERE key = :k"),
+                {"k": "support:inbox"},
+            ).fetchone()
+        except Exception as e:
+            log.warning("support: cannot read kv_store: %s", e)
+            return []
+
+        if not row or not row[0]:
+            return []
+
+        try:
+            data = json.loads(row[0])
+        except Exception:
+            return []
+
+        # expect list of threads; if it's a dict wrap it
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            return []
+        return data
+
+
+def _support_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🔄 Refresh", callback_data="list_support:0")],
+        ]
+    )
+
+
+# ================== HELPERS ==================
+def staff_only(update: Update) -> bool:
+    uid = update.effective_user.id if update.effective_user else None
+    if uid in STAFF_IDS:
+        return True
+
+    if update.message:
+        update.message.reply_text("🚫 You are not allowed to use this staff bot.")
+    elif update.callback_query:
+        update.callback_query.answer("Not allowed.", show_alert=True)
+    return False
+
+
+def main_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("💰 Deposits", callback_data="list_deposits:0")],
+            [InlineKeyboardButton("💸 Withdrawals", callback_data="list_withdrawals:0")],
+            [InlineKeyboardButton("🆔 Game requests", callback_data="list_requests:0")],
+            [InlineKeyboardButton("👥 Players", callback_data="list_players:0")],
+            # 👇 this is the new one, to match employee dashboard
+            [InlineKeyboardButton("💬 Support", callback_data="list_support:0")],
+        ]
+    )
+
+
+def _display_name(user: User | None) -> str:
+    if not user:
+        return "—"
+    return (user.name or user.email or f"User #{user.id}").strip()
+
+
+def _player_login_for_game(user_id: int, game_id: int | None) -> str | None:
+    if not game_id:
+        return None
+    acc = GameAccount.query.filter_by(user_id=user_id, game_id=game_id).first()
+    if not acc:
+        return None
+    for f in ("account_username", "username", "login", "user"):
+        if hasattr(acc, f):
+            v = getattr(acc, f)
+            if v:
+                return v
+    return None
+
+
+def _vendor_for_game(game: Game | None) -> str | None:
+    if not game:
+        return None
+    return detect_vendor(game)
+
+
+def _add_wallet_balance(user_id: int, amount: int):
+    wallet = PlayerBalance.query.filter_by(user_id=user_id).first()
+    if wallet:
+        wallet.balance = (wallet.balance or 0) + amount
+
+
+# ================== COMMANDS ==================
+def start_cmd(update: Update, context: CallbackContext):
+    if not staff_only(update):
+        return
+
+    txt = (
+        f"👋 *{BOT_NAME}*\n"
+        "Process player deposits, approve/reject game login requests, pay withdrawals, and view players.\n\n"
+        "Commands:\n"
+        "/panel – main menu\n"
+        "/deposits – list pending deposits\n"
+        "/withdrawals – list pending withdrawals\n"
+        "/requests – list pending game login requests\n"
+        "/players – list recent players\n"
+        "/support – support inbox\n"
+    )
+    update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
+
+
+def panel_cmd(update: Update, context: CallbackContext):
+    if not staff_only(update):
+        return
+    with flask_app.app_context():
+        pending_deposits = DepositRequest.query.filter_by(status="PENDING").count()
+        pending_requests = GameAccountRequest.query.filter(
+            GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"])
+        ).count()
+        pending_withdraws = WithdrawRequest.query.filter_by(status="PENDING").count()
+
+    txt = (
+        "*Staff panel:*\n"
+        f"💰 Pending deposits: *{pending_deposits}*\n"
+        f"🆔 Pending game requests: *{pending_requests}*\n"
+        f"💸 Pending withdrawals: *{pending_withdraws}*\n"
+    )
+    update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
+
+
+def deposits_cmd(update: Update, context: CallbackContext):
+    if not staff_only(update):
+        return
+    _send_deposits_list(update, page=0)
+
+
+def withdrawals_cmd(update: Update, context: CallbackContext):
+    if not staff_only(update):
+        return
+    _send_withdrawals_list(update, page=0)
+
+
+def requests_cmd(update: Update, context: CallbackContext):
+    if not staff_only(update):
+        return
+    _send_requests_list(update, page=0)
+
+
+def players_cmd(update: Update, context: CallbackContext):
+    if not staff_only(update):
+        return
+    _send_players_list(update, page=0)
+
+
+def support_cmd(update: Update, context: CallbackContext):
+    if not staff_only(update):
+        return
+    _send_support_list(update, page=0)
+
+
+def whoami_cmd(update: Update, context: CallbackContext):
+    user = update.effective_user
+    uid = user.id if user else None
+    uname = user.full_name if user else "unknown"
+    update.message.reply_text(f"Your Telegram ID is: {uid}\nName: {uname}")
+
+
+# ================== LIST SENDERS ==================
+def _send_deposits_list(target, page: int):
+    with flask_app.app_context():
+        q = (
+            DepositRequest.query.filter(DepositRequest.status.in_(["PENDING", "RECEIVED"]))
+            .order_by(DepositRequest.created_at.asc())
+        )
+        total = q.count()
+        rows = q.offset(page * PAGE_SIZE).limit(PAGE_SIZE).all()
+
+    if not rows:
+        if hasattr(target, "message"):
+            target.message.reply_text("No pending deposits ✅", reply_markup=main_menu_kb())
+        else:
+            target.edit_message_text("No pending deposits ✅", reply_markup=main_menu_kb())
+        return
+
+    text_lines = [f"💰 *Pending deposits* (page {page+1})"]
+    for d in rows:
+        text_lines.append(f"- #{d.id} • user {d.user_id} • {d.amount} via {d.method}")
+    text = "\n".join(text_lines)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"list_deposits:{page-1}"))
+    if (page + 1) * PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("➡️ Next", callback_data=f"list_deposits:{page+1}"))
+
+    if hasattr(target, "message"):
+        target.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                  reply_markup=InlineKeyboardMarkup([nav] if nav else []))
+    else:
+        target.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                 reply_markup=InlineKeyboardMarkup([nav] if nav else []))
+
+    for d in rows:
+        _send_deposit_card(target, d)
+
+
+def _send_withdrawals_list(target, page: int):
+    with flask_app.app_context():
+        q = (
+            WithdrawRequest.query.filter_by(status="PENDING")
+            .order_by(WithdrawRequest.created_at.asc())
+        )
+        total = q.count()
+        rows = q.offset(page * PAGE_SIZE).limit(PAGE_SIZE).all()
+
+    if not rows:
+        if hasattr(target, "message"):
+            target.message.reply_text("No pending withdrawals ✅", reply_markup=main_menu_kb())
+        else:
+            target.edit_message_text("No pending withdrawals ✅", reply_markup=main_menu_kb())
+        return
+
+    text_lines = [f"💸 *Pending withdrawals* (page {page+1})"]
+    for w in rows:
+        text_lines.append(f"- #{w.id} • user {w.user_id} • {w.amount} via {w.method}")
+    text = "\n".join(text_lines)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"list_withdrawals:{page-1}"))
+    if (page + 1) * PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("➡️ Next", callback_data=f"list_withdrawals:{page+1}"))
+
+    if hasattr(target, "message"):
+        target.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                  reply_markup=InlineKeyboardMarkup([nav] if nav else []))
+    else:
+        target.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                 reply_markup=InlineKeyboardMarkup([nav] if nav else []))
+
+    for w in rows:
+        _send_withdraw_card(target, w)
+
+
+def _send_requests_list(target, page: int):
+    with flask_app.app_context():
+        q = (
+            GameAccountRequest.query.filter(
+                GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"])
+            )
+            .order_by(GameAccountRequest.created_at.asc())
+        )
+        total = q.count()
+        rows = q.offset(page * PAGE_SIZE).limit(PAGE_SIZE).all()
+
+    if not rows:
+        if hasattr(target, "message"):
+            target.message.reply_text("No pending game login requests ✅", reply_markup=main_menu_kb())
+        else:
+            target.edit_message_text("No pending game login requests ✅", reply_markup=main_menu_kb())
+        return
+
+    text_lines = [f"🆔 *Game login requests* (page {page+1})"]
+    for r in rows:
+        text_lines.append(f"- #{r.id} • user {r.user_id} • game {r.game_id} • {r.status}")
+    text = "\n".join(text_lines)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"list_requests:{page-1}"))
+    if (page + 1) * PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("➡️ Next", callback_data=f"list_requests:{page+1}"))
+
+    if hasattr(target, "message"):
+        target.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                  reply_markup=InlineKeyboardMarkup([nav] if nav else []))
+    else:
+        target.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                 reply_markup=InlineKeyboardMarkup([nav] if nav else []))
+
+    for r in rows:
+        _send_request_card(target, r)
+
+
+def _send_players_list(target, page: int):
+    with flask_app.app_context():
+        q = (
+            User.query.filter_by(role="PLAYER")
+            .order_by(User.created_at.desc())
+        )
+        total = q.count()
+        rows = q.offset(page * PAGE_SIZE).limit(PAGE_SIZE).all()
+
+    if not rows:
+        if hasattr(target, "message"):
+            target.message.reply_text("No players.", reply_markup=main_menu_kb())
+        else:
+            target.edit_message_text("No players.", reply_markup=main_menu_kb())
+        return
+
+    text_lines = [f"👥 *Players* (page {page+1})"]
+    for u in rows:
+        text_lines.append(f"- {u.id} • {_display_name(u)}")
+    text = "\n".join(text_lines)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"list_players:{page-1}"))
+    if (page + 1) * PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("➡️ Next", callback_data=f"list_players:{page+1}"))
+
+    if hasattr(target, "message"):
+        target.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                  reply_markup=InlineKeyboardMarkup([nav] if nav else []))
+    else:
+        target.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                 reply_markup=InlineKeyboardMarkup([nav] if nav else []))
+
+
+def _send_support_list(target, page: int):
+    """Show support inbox from kv_store."""
+    inbox = _read_support_inbox()
+
+    if not inbox:
+        # exactly what you saw
+        if hasattr(target, "message"):
+            target.message.reply_text("No support messages ✅", reply_markup=main_menu_kb())
+        else:
+            target.edit_message_text("No support messages ✅", reply_markup=main_menu_kb())
+        return
+
+    # paginate
+    total = len(inbox)
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+    rows = inbox[start:end]
+
+    text_lines = [f"💬 *Support inbox* (page {page+1})"]
+    for item in rows:
+        # try to be defensive because we don't know exact structure
+        player_name = item.get("player_name") or item.get("name") or item.get("user_name") or "—"
+        player_email = item.get("player_email") or item.get("email") or ""
+        user_id = item.get("user_id") or item.get("uid") or item.get("id") or "?"
+        last_msg = item.get("last_message") or item.get("message") or item.get("text") or "(no text)"
+        updated_at = item.get("updated_at") or item.get("last_activity") or ""
+        text_lines.append(
+            f"• {player_name} (id {user_id})\n  {last_msg}"
+            + (f"\n  {player_email}" if player_email else "")
+            + (f"\n  {updated_at}" if updated_at else "")
+        )
+
+    text = "\n".join(text_lines)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"list_support:{page-1}"))
+    if end < total:
+        nav.append(InlineKeyboardButton("➡️ Next", callback_data=f"list_support:{page+1}"))
+
+    kb_rows = []
+    if nav:
+        kb_rows.append(nav)
+    # button to refresh current page
+    kb_rows.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"list_support:{page}")])
+
+    if hasattr(target, "message"):
+        target.message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(kb_rows),
+            disable_web_page_preview=True,
+        )
+    else:
+        target.edit_message_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(kb_rows),
+            disable_web_page_preview=True,
+        )
+
+
+# ================== CARD SENDERS ==================
+# ================== CARD SENDERS ==================
+def _send_deposit_card(target, dep: DepositRequest):
+    # ---- load related objects & meta inside Flask context ----
+    with flask_app.app_context():
+        user = db.session.get(User, dep.user_id) if dep.user_id else None
+        game = db.session.get(Game, dep.game_id) if dep.game_id else None
+        settings = db.session.get(PaymentSettings, 1)
+
+        # meta can be dict (JSON column) or JSON string
+        meta = {}
+        try:
+            if isinstance(dep.meta, dict):
+                meta = dep.meta
+            elif dep.meta:
+                meta = json.loads(dep.meta)
+        except Exception:
+            meta = {}
+
+    uname = _display_name(user)
+    gname = game.name if game else "—"
+
+    # ------------- base lines (same for all methods) -------------
+    lines = [
+        f"💰 *Deposit #{dep.id}*",
+        f"Player: {uname} (id {dep.user_id})",
+        f"Amount: *{dep.amount}*",
+        f"Method: `{dep.method or '-'}`",
+        f"Game: {gname}",
+        f"Status: {dep.status}",
+    ]
+
+    if dep.created_at:
+        lines.append(f"Created: `{dep.created_at:%Y-%m-%d %H:%M}`")
+
+    # ------------- method-specific details (match employee dashboard) -------------
+    detail_lines = []
+
+    method = (dep.method or "").upper()
+
+    if method == "CHIME":
+        payer_name = (meta.get("payer_name") or "").strip()
+        payer_handle = (
+            meta.get("payer_handle")
+            or meta.get("payer_contact")
+            or meta.get("chime_handle")
+            or ""
+        ).strip()
+
+        # fallback to global CHIME handle like dashboard
+        if not (payer_name or payer_handle) and settings and getattr(settings, "chime_handle", None):
+            payer_handle = settings.chime_handle
+
+        if payer_name:
+            detail_lines.append(f"Name: {payer_name}")
+        if payer_handle:
+            detail_lines.append(f"Handle: `{payer_handle}`")
+
+    elif method == "CRYPTO":
+        from_addr = (
+            meta.get("payer_wallet")
+            or meta.get("payer_address")
+            or meta.get("crypto_from")
+            or ""
+        ).strip()
+        net = (meta.get("network") or meta.get("chain") or "").strip()
+
+        if from_addr:
+            detail_lines.append(f"From: `{from_addr}`")
+        if net:
+            detail_lines.append(f"Network: {net}")
+
+    elif method == "CASHAPP":
+        cash_tag = (
+            meta.get("payer_cashtag")
+            or meta.get("payer_handle")
+            or meta.get("payer_contact")
+            or ""
+        ).strip()
+        if cash_tag:
+            detail_lines.append(f"From: `{cash_tag}`")
+
+    # ------------- proof link (always show something) -------------
+    proof_url_raw = (dep.proof_url or "").strip() or (meta.get("proof_url") or "").strip()
+    proof_display = proof_url_raw
+    proof_link = None
+
+    if proof_url_raw:
+        proof_link = proof_url_raw
+
+        # build full URL if it's relative (/static/...)
+        if not proof_link.lower().startswith(("http://", "https://")):
+            base = (
+                flask_app.config.get("EXTERNAL_BASE_URL")
+                or os.getenv("EXTERNAL_BASE_URL", "")
+            )
+            if base.endswith("/"):
+                base = base[:-1]
+            if not proof_link.startswith("/"):
+                proof_link = "/" + proof_link
+            if base:
+                proof_link = base + proof_link
+
+        # if we successfully got http/https, make it clickable,
+        # otherwise show plain text path
+        if proof_link.lower().startswith(("http://", "https://")):
+            detail_lines.append(f"[View proof]({proof_link})")
+        else:
+            # still show the path so staff can copy it
+            detail_lines.append(f"Proof: `{proof_display}`")
+
+    # ------------- assemble text -------------
+    if detail_lines:
+        lines.append("")
+        lines.append("*Details:*")
+        lines.extend(detail_lines)
+
+    text = "\n".join(lines)
+
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Mark LOADED", callback_data=f"dep_loaded:{dep.id}"),
+                InlineKeyboardButton("🤖 Approve+Credit", callback_data=f"dep_auto:{dep.id}"),
+            ],
+            [InlineKeyboardButton("❌ Reject", callback_data=f"dep_reject:{dep.id}")],
+        ]
+    )
+
+    if hasattr(target, "message"):
+        target.message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True,
+            reply_markup=kb,
+        )
+    else:
+        target.edit_message_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True,
+            reply_markup=kb,
+        )
+
+
+def _send_withdraw_card(target, wd: WithdrawRequest):
+    # Make withdrawal card mirror employee Withdrawals page
+    with flask_app.app_context():
+        user = db.session.get(User, wd.user_id) if wd.user_id else None
+        game = db.session.get(Game, wd.game_id) if wd.game_id else None
+        wallet = PlayerBalance.query.filter_by(user_id=wd.user_id).first()
+        login = _player_login_for_game(wd.user_id, wd.game_id)
+
+    uname = _display_name(user)
+    gname = game.name if game else "—"
+
+    # ---------- base section ----------
+    lines = [
+        f"💸 *Withdrawal #{wd.id}*",
+        f"Player: {uname} (id {wd.user_id})",
+        f"Game: {gname}",
+    ]
+    if login:
+        lines.append(f"Login: `{login}`")
+
+    lines.extend(
+        [
+            f"Amount: *{wd.amount}*",
+            f"Method: `{wd.method or '-'}`",
+            f"Status: {wd.status}",
+        ]
+    )
+
+    if wd.created_at:
+        lines.append(f"Requested: `{wd.created_at:%Y-%m-%d %H:%M}`")
+
+    # ---------- details (wallet, totals, address, tip etc.) ----------
+    detail_lines = []
+
+    # current wallet balance
+    if wallet and wallet.balance is not None:
+        detail_lines.append(f"Wallet: *{int(wallet.balance)}*")
+
+    # optional totals if model has them
+    if getattr(wd, "total_amount", None):
+        detail_lines.append(f"Total: *{wd.total_amount}*")
+    if getattr(wd, "keep_amount", None):
+        detail_lines.append(f"Keep in wallet: *{wd.keep_amount}*")
+    if getattr(wd, "tip_amount", None) and wd.tip_amount > 0:
+        detail_lines.append(f"Tip: *{wd.tip_amount}*")
+
+    # destination address / handle
+    addr = (getattr(wd, "address", "") or "").strip()
+    if addr:
+        method = (wd.method or "").upper()
+        if method == "CRYPTO":
+            label = "Address"
+        elif method == "CHIME":
+            label = "Chime"
+        else:
+            label = "Destination"
+        detail_lines.append(f"{label}: `{addr}`")
+
+    if detail_lines:
+        lines.append("")
+        lines.append("*Details:*")
+        lines.extend(detail_lines)
+
+    text = "\n".join(lines)
+
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔁 Redeem", callback_data=f"wd_redeem:{wd.id}"),
+                InlineKeyboardButton("✅ Mark PAID", callback_data=f"wd_paid:{wd.id}"),
+            ],
+            [InlineKeyboardButton("❌ Reject", callback_data=f"wd_reject:{wd.id}")],
+        ]
+    )
+
+    if hasattr(target, "message"):
+        target.message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb,
+        )
+    else:
+        target.edit_message_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb,
+        )
+
+
+def _send_request_card(target, req: GameAccountRequest):
+    with flask_app.app_context():
+        user = db.session.get(User, req.user_id) if req.user_id else None
+        game = db.session.get(Game, req.game_id) if req.game_id else None
+    uname = _display_name(user)
+    gname = game.name if game else "—"
+    lines = [
+        f"🆔 *Game request #{req.id}*",
+        f"Player: {uname} (id {req.user_id})",
+        f"Game: {gname}",
+        f"Status: {req.status}",
+    ]
+    text = "\n".join(lines)
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Approve", callback_data=f"req_ok:{req.id}"),
+                InlineKeyboardButton("❌ Reject", callback_data=f"req_no:{req.id}"),
+            ],
+            [
+                InlineKeyboardButton("🤖 Auto-provision", callback_data=f"req_auto:{req.id}"),
+                InlineKeyboardButton("⏳ In progress", callback_data=f"req_prog:{req.id}"),
+            ],
+        ]
+    )
+    if hasattr(target, "message"):
+        target.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+    else:
+        target.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+
+
+# ================== CALLBACK HANDLER ==================
+def callback_handler(update: Update, context: CallbackContext):
+    if not staff_only(update):
+        return
+
+    q = update.callback_query
+    data = q.data or ""
+    # NOTE: we will call q.answer(...) again in actions to show “working…”
+    q.answer()
+
+    # lists
+    if data.startswith("list_deposits:"):
+        page = int(data.split(":", 1)[1])
+        _send_deposits_list(q, page)
+        return
+    if data.startswith("list_withdrawals:"):
+        page = int(data.split(":", 1)[1])
+        _send_withdrawals_list(q, page)
+        return
+    if data.startswith("list_requests:"):
+        page = int(data.split(":", 1)[1])
+        _send_requests_list(q, page)
+        return
+    if data.startswith("list_players:"):
+        page = int(data.split(":", 1)[1])
+        _send_players_list(q, page)
+        return
+    if data.startswith("list_support:"):
+        page = int(data.split(":", 1)[1])
+        _send_support_list(q, page)
+        return
+
+    # ================== DEPOSITS ==================
+    if data.startswith("dep_loaded:"):
+        dep_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Marking deposit #{dep_id} as LOADED…")
+        with flask_app.app_context():
+            dep = db.session.get(DepositRequest, dep_id)
+            if not dep:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Deposit not found.")
+                return
+            dep.status = "LOADED"
+            dep.loaded_at = datetime.utcnow()
+            _add_wallet_balance(dep.user_id, int(dep.amount or 0))
+            db.session.commit()
+            notify(dep.user_id, f"✅ Your deposit #{dep.id} of {dep.amount} has been loaded.")
+        context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid,
+                                      text=f"Deposit #{dep_id} ✅ marked LOADED.")
+        return
+
+    if data.startswith("dep_reject:"):
+        dep_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Rejecting deposit #{dep_id}…")
+        with flask_app.app_context():
+            dep = db.session.get(DepositRequest, dep_id)
+            if not dep:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Deposit not found.")
+                return
+            dep.status = "REJECTED"
+            db.session.commit()
+            notify(dep.user_id, f"❌ Your deposit #{dep.id} was rejected. Please contact support.")
+        context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid,
+                                      text=f"Deposit #{dep_id} ❌ rejected.")
+        return
+
+    if data.startswith("dep_auto:"):
+        dep_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Crediting deposit #{dep_id}…")
+        with flask_app.app_context():
+            dep = db.session.get(DepositRequest, dep_id)
+            if not dep:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Deposit not found.")
+                return
+            if dep.status not in ("PENDING", "RECEIVED"):
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text=f"Deposit #{dep.id} has status {dep.status}, not PENDING/RECEIVED.",
+                )
+                return
+            game = db.session.get(Game, dep.game_id) if dep.game_id else None
+            vendor = _vendor_for_game(game)
+            if not vendor:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid,
+                                              text="Vendor not recognized for this game.")
+                return
+            acc_username = _player_login_for_game(dep.user_id, dep.game_id)
+            if not acc_username:
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text="Player has no saved login for this game/vendor.",
+                )
+                return
+            amount = int(dep.amount or 0)
+            if amount <= 0:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Amount must be > 0")
+                return
+
+            note = f"Deposit#{dep.id} via Telegram"
+            try:
+                res = provider_credit(vendor, acc_username, amount, note)
+            except Exception as e:
+                msg = str(e)
+                if "Locator.click" in msg or "Timeout 60000ms" in msg or "recharge" in msg.lower():
+                    context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=progress_mid,
+                        text="⚠️ JUWA recharge failed.\nPlease try again or load it manually in the JUWA panel.",
+                    )
+                else:
+                    context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=progress_mid,
+                        text=f"{vendor.upper()} credit failed: {msg}",
+                    )
+                return
+
+            if not _prov_ok(vendor, res):
+                err_txt = _prov_err(res) or "unknown error"
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text=f"⚠️ {vendor.upper()} recharge failed.\nReason: {err_txt}\nTry again or do it manually.",
+                )
+                return
+
+            dep.status = "LOADED"
+            dep.loaded_at = datetime.utcnow()
+            _add_wallet_balance(dep.user_id, amount)
+            db.session.commit()
+            notify(dep.user_id, f"✅ Your deposit #{dep.id} of {amount} has been credited to {vendor.upper()}.")
+        context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_mid,
+            text=f"Deposit #{dep_id} ✅ credited on vendor and marked LOADED.",
+        )
+        return
+
+    # ================== WITHDRAWALS ==================
+    if data.startswith("wd_redeem:"):
+        wd_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Redeeming withdrawal #{wd_id}…")
+        with flask_app.app_context():
+            wd = db.session.get(WithdrawRequest, wd_id)
+            if not wd:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Withdrawal not found.")
+                return
+            game = db.session.get(Game, wd.game_id) if wd.game_id else None
+            vendor = _vendor_for_game(game)
+            acc_username = _player_login_for_game(wd.user_id, wd.game_id) if wd.game_id else None
+
+            if (not acc_username) or (not vendor):
+                accs = GameAccount.query.filter_by(user_id=wd.user_id).all()
+                for a in accs:
+                    g = db.session.get(Game, a.game_id) if a.game_id else None
+                    v = _vendor_for_game(g)
+                    if v:
+                        acc_username = acc_username or (
+                            a.account_username or a.username or a.login or a.user
+                        )
+                        vendor = vendor or v
+                        if acc_username and vendor:
+                            break
+
+            if not acc_username or not vendor:
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text="Cannot redeem: no username/vendor found for player.",
+                )
+                return
+
+            amount = int(wd.amount or 0)
+            if amount <= 0:
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text="Redeem amount must be > 0.",
+                )
+                return
+
+            try:
+                res = provider_redeem(vendor, acc_username, amount, f"Withdraw #{wd.id}")
+            except Exception as e:
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text=f"Redeem error: {e}",
+                )
+                return
+            if not _prov_ok(vendor, res):
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text=f"Redeem failed: {_prov_err(res)}",
+                )
+                return
+
+            wd.status = "APPROVED"
+            db.session.commit()
+            notify(wd.user_id, f"🔓 Your withdrawal #{wd.id} was redeemed and is awaiting payout.")
+        context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_mid,
+            text=f"Withdrawal #{wd_id} ✅ redeemed on {vendor.upper()}.",
+        )
+        return
+
+    if data.startswith("wd_paid:"):
+        wd_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Marking withdrawal #{wd_id} as PAID…")
+        with flask_app.app_context():
+            wd = db.session.get(WithdrawRequest, wd_id)
+            if not wd:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Withdrawal not found.")
+                return
+            wd.status = "PAID"
+            wd.paid_at = datetime.utcnow()
+            wallet = PlayerBalance.query.filter_by(user_id=wd.user_id).first()
+            if wallet:
+                wallet.balance = max(0, (wallet.balance or 0) - (wd.amount or 0))
+            db.session.commit()
+            notify(wd.user_id, f"💸 Your withdrawal #{wd.id} for {wd.amount} has been paid.")
+        context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_mid,
+            text=f"Withdrawal #{wd_id} ✅ marked PAID.",
+        )
+        return
+
+    if data.startswith("wd_reject:"):
+        wd_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Rejecting withdrawal #{wd_id}…")
+        with flask_app.app_context():
+            wd = db.session.get(WithdrawRequest, wd_id)
+            if not wd:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Withdrawal not found.")
+                return
+            wd.status = "REJECTED"
+            db.session.commit()
+            notify(wd.user_id, f"⚠️ Your withdrawal #{wd.id} was rejected. Contact support.")
+        context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_mid,
+            text=f"Withdrawal #{wd_id} ❌ rejected.",
+        )
+        return
+
+    # ================== GAME REQUESTS ==================
+    if data.startswith("req_ok:"):
+        req_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Approving game request #{req_id}…")
+        with flask_app.app_context():
+            req = db.session.get(GameAccountRequest, req_id)
+            if not req:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Request not found.")
+                return
+            req.status = "APPROVED"
+            req.approved_at = datetime.utcnow()
+            db.session.commit()
+            notify(req.user_id, f"✅ Your game login request #{req.id} was approved. Open My Logins.")
+        context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_mid,
+            text=f"Game request #{req_id} ✅ approved.",
+        )
+        return
+
+    if data.startswith("req_no:"):
+        req_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Rejecting game request #{req_id}…")
+        with flask_app.app_context():
+            req = db.session.get(GameAccountRequest, req_id)
+            if not req:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Request not found.")
+                return
+            if (req.status or "").upper() not in ("APPROVED", "PROVIDED", "REJECTED"):
+                req.status = "REJECTED"
+                db.session.commit()
+                notify(req.user_id, f"⚠️ Your game login request #{req.id} was rejected.")
+        context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_mid,
+            text=f"Game request #{req_id} ❌ rejected.",
+        )
+        return
+
+    if data.startswith("req_prog:"):
+        req_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Marking game request #{req_id} IN_PROGRESS…")
+        with flask_app.app_context():
+            req = db.session.get(GameAccountRequest, req_id)
+            if not req:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Request not found.")
+                return
+            req.status = "IN_PROGRESS"
+            db.session.commit()
+        context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_mid,
+            text=f"Game request #{req_id} ⏳ marked IN_PROGRESS.",
+        )
+        return
+
+    if data.startswith("req_auto:"):
+        req_id = int(data.split(":", 1)[1])
+        chat_id = q.message.chat_id
+        _ack_working(q)
+        _set_loading_keyboard(q)
+        progress_mid = _send_progress_msg(context.bot, chat_id, f"⏳ Auto-provisioning for request #{req_id}…")
+        with flask_app.app_context():
+            req = db.session.get(GameAccountRequest, req_id)
+            if not req:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=progress_mid, text="Request not found.")
+                return
+            game = db.session.get(Game, req.game_id) if req.game_id else None
+            vendor = _vendor_for_game(game)
+            if vendor != "milkyway":
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text="Auto-provision supported only for Milkyway (in this build).",
+                )
+                return
+            try:
+                r = provider_auto_create(vendor)
+            except Exception as e:
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text=f"Auto-provision error: {e}",
+                )
+                return
+            if not isinstance(r, dict) or not r.get("ok"):
+                context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_mid,
+                    text=f"Auto-provision failed: {r}",
+                )
+                return
+
+            username = r.get("username")
+            password = r.get("password") or username
+            note = r.get("note") or "Auto-provisioned via Telegram"
+
+            acc = GameAccount.query.filter_by(user_id=req.user_id, game_id=req.game_id).first()
+            if not acc:
+                acc = GameAccount(user_id=req.user_id, game_id=req.game_id)
+                db.session.add(acc)
+
+            for f in ("account_username", "username", "login", "user"):
+                if hasattr(acc, f):
+                    setattr(acc, f, username)
+                    break
+            for f in ("account_password", "password", "passcode", "pin"):
+                if hasattr(acc, f):
+                    setattr(acc, f, password)
+                    break
+            if hasattr(acc, "extra"):
+                acc.extra = note
+
+            req.status = "APPROVED"
+            req.approved_at = datetime.utcnow()
+            db.session.commit()
+            notify(req.user_id, "🤖 Your Milkyway login was issued. Open My Logins.")
+        context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_mid,
+            text=f"Game request #{req_id} 🤖 auto-provisioned.",
+        )
+        return
+
+
+# ================== AUTO-POLL JOB ==================
+def poll_new_items(context: CallbackContext):
+    job_ctx = context.job.context
+    state = job_ctx["state"]
+    staff_ids = job_ctx["staff_ids"]
+
+    try:
+        with flask_app.app_context():
+            last_dep_id = state.get("last_dep_id", 0)
+            new_deps = (
+                db.session.query(DepositRequest)
+                .filter(DepositRequest.id > last_dep_id)
+                .order_by(DepositRequest.id.asc())
+                .all()
+            )
+            for dep in new_deps:
+                if (dep.status or "").upper() not in ("PENDING", "RECEIVED"):
+                    state["last_dep_id"] = dep.id
+                    continue
+
+                user = db.session.get(User, dep.user_id) if dep.user_id else None
+                game = db.session.get(Game, dep.game_id) if dep.game_id else None
+
+                text_msg = (
+                    f"💰 *New deposit* #{dep.id}\n"
+                    f"Player: {_display_name(user)} (id {dep.user_id})\n"
+                    f"Amount: *{dep.amount}*\n"
+                    f"Method: {dep.method or '-'}\n"
+                    f"Game: {game.name if game else '-'}\n"
+                )
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton("✅ Mark LOADED", callback_data=f"dep_loaded:{dep.id}"),
+                            InlineKeyboardButton("🤖 Approve+Credit", callback_data=f"dep_auto:{dep.id}"),
+                        ],
+                        [InlineKeyboardButton("❌ Reject", callback_data=f"dep_reject:{dep.id}")],
+                    ]
+                )
+
+                for sid in staff_ids:
+                    try:
+                        context.bot.send_message(
+                            chat_id=sid,
+                            text=text_msg,
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_markup=kb,
+                            disable_web_page_preview=True,
+                        )
+                    except Exception as e:
+                        log.warning("cannot push deposit to %s: %s", sid, e)
+
+                state["last_dep_id"] = dep.id
+
+            last_wd_id = state.get("last_wd_id", 0)
+            new_wds = (
+                db.session.query(WithdrawRequest)
+                .filter(WithdrawRequest.id > last_wd_id)
+                .order_by(WithdrawRequest.id.asc())
+                .all()
+            )
+            for wd in new_wds:
+                if (wd.status or "").upper() not in ("PENDING",):
+                    state["last_wd_id"] = wd.id
+                    continue
+
+                user = db.session.get(User, wd.user_id) if wd.user_id else None
+                game = db.session.get(Game, wd.game_id) if wd.game_id else None
+
+                text_msg = (
+                    f"💸 *New withdrawal* #{wd.id}\n"
+                    f"Player: {_display_name(user)} (id {wd.user_id})\n"
+                    f"Amount: *{wd.amount}*\n"
+                    f"Method: {wd.method or '-'}\n"
+                    f"Game: {game.name if game else '-'}\n"
+                )
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton("🔁 Redeem", callback_data=f"wd_redeem:{wd.id}"),
+                            InlineKeyboardButton("✅ Mark PAID", callback_data=f"wd_paid:{wd.id}"),
+                        ],
+                        [InlineKeyboardButton("❌ Reject", callback_data=f"wd_reject:{wd.id}")],
+                    ]
+                )
+                for sid in staff_ids:
+                    try:
+                        context.bot.send_message(
+                            chat_id=sid,
+                            text=text_msg,
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_markup=kb,
+                        )
+                    except Exception as e:
+                        log.warning("cannot push withdraw to %s: %s", sid, e)
+
+                state["last_wd_id"] = wd.id
+
+            last_acc_id = state.get("last_acc_id", 0)
+            new_accs = (
+                db.session.query(GameAccountRequest)
+                .filter(GameAccountRequest.id > last_acc_id)
+                .order_by(GameAccountRequest.id.asc())
+                .all()
+            )
+            for req in new_accs:
+                if (req.status or "").upper() not in ("PENDING", "IN_PROGRESS"):
+                    state["last_acc_id"] = req.id
+                    continue
+
+                user = db.session.get(User, req.user_id) if req.user_id else None
+                game = db.session.get(Game, req.game_id) if req.game_id else None
+
+                text_msg = (
+                    f"🆔 *New game account request* #{req.id}\n"
+                    f"Player: {_display_name(user)} (id {req.user_id})\n"
+                    f"Game: {game.name if game else '-'}\n"
+                )
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton("✅ Approve", callback_data=f"req_ok:{req.id}"),
+                            InlineKeyboardButton("❌ Reject", callback_data=f"req_no:{req.id}"),
+                        ],
+                        [
+                            InlineKeyboardButton("🤖 Auto-provision", callback_data=f"req_auto:{req.id}"),
+                            InlineKeyboardButton("⏳ In progress", callback_data=f"req_prog:{req.id}"),
+                        ],
+                    ]
+                )
+                for sid in staff_ids:
+                    try:
+                        context.bot.send_message(
+                            chat_id=sid,
+                            text=text_msg,
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_markup=kb,
+                        )
+                    except Exception as e:
+                        log.warning("cannot push account req to %s: %s", sid, e)
+
+                state["last_acc_id"] = req.id
+
+            # ----------------- OPTIONAL: notify counts like before -----------------
+            pending_dep_count = (
+                db.session.query(DepositRequest)
+                .filter(DepositRequest.status.in_(["PENDING", "RECEIVED"]))
+                .count()
+            )
+            pending_wd_count = (
+                db.session.query(WithdrawRequest)
+                .filter(WithdrawRequest.status.in_(["PENDING"]))
+                .count()
+            )
+            pending_acc_count = (
+                db.session.query(GameAccountRequest)
+                .filter(GameAccountRequest.status.in_(["PENDING", "IN_PROGRESS"]))
+                .count()
+            )
+
+            last_dep_count = state.get("last_dep_count", 0)
+            last_wd_count = state.get("last_wd_count", 0)
+            last_acc_count = state.get("last_acc_count", 0)
+
+            if pending_dep_count > 0 and pending_dep_count != last_dep_count:
+                for sid in staff_ids:
+                    try:
+                        context.bot.send_message(chat_id=sid, text="⚠️ New deposit pending. Tap /deposits")
+                    except Exception as e:
+                        log.warning("cannot send dep notice: %s", e)
+                state["last_dep_count"] = pending_dep_count
+
+            if pending_wd_count > 0 and pending_wd_count != last_wd_count:
+                for sid in staff_ids:
+                    try:
+                        context.bot.send_message(chat_id=sid, text="⚠️ New withdrawal pending. Tap /withdrawals")
+                    except Exception as e:
+                        log.warning("cannot send wd notice: %s", e)
+                state["last_wd_count"] = pending_wd_count
+
+            if pending_acc_count > 0 and pending_acc_count != last_acc_count:
+                for sid in staff_ids:
+                    try:
+                        context.bot.send_message(chat_id=sid, text="⚠️ New game account request. Tap /requests")
+                    except Exception as e:
+                        log.warning("cannot send acc notice: %s", e)
+                state["last_acc_count"] = pending_acc_count
+
+            save_state(state)
+
+    except Exception as e:
+        log.exception("poll_new_items crashed: %s", e)
+
+
+# ================== MAIN ==================
+def main():
+    if not TOKEN:
+        raise SystemExit("TELEGRAM_BOT_TOKEN missing in .env")
+
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("whoami", whoami_cmd))
+    dp.add_handler(CommandHandler("start", start_cmd))
+    dp.add_handler(CommandHandler("panel", panel_cmd))
+    dp.add_handler(CommandHandler("deposits", deposits_cmd))
+    dp.add_handler(CommandHandler("withdrawals", withdrawals_cmd))
+    dp.add_handler(CommandHandler("requests", requests_cmd))
+    dp.add_handler(CommandHandler("players", players_cmd))
+    dp.add_handler(CommandHandler("support", support_cmd))  # 👈 new
+
+    dp.add_handler(CallbackQueryHandler(callback_handler))
+
+    state = load_state()
+    with flask_app.app_context():
+        if "last_dep_id" not in state:
+            last_dep = db.session.query(DepositRequest.id).order_by(DepositRequest.id.desc()).first()
+            state["last_dep_id"] = last_dep[0] if last_dep else 0
+        if "last_wd_id" not in state:
+            last_wd = db.session.query(WithdrawRequest.id).order_by(WithdrawRequest.id.desc()).first()
+            state["last_wd_id"] = last_wd[0] if last_wd else 0
+        if "last_acc_id" not in state:
+            last_acc = db.session.query(GameAccountRequest.id).order_by(GameAccountRequest.id.desc()).first()
+            state["last_acc_id"] = last_acc[0] if last_acc else 0
+    save_state(state)
+
+    job_context = {
+        "state": state,
+        "staff_ids": STAFF_IDS,
+    }
+
+    updater.job_queue.run_repeating(
+        poll_new_items,
+        interval=5,
+        first=5,
+        context=job_context,
+    )
+
+    log.info("Telegram staff bot started with live monitoring.")
+    updater.start_polling()
+    updater.idle()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="shell">
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
+    <div class="h3">Referrals</div>
+    <a class="btn" href="{{ url_for('employeebp.employee_home') }}">Back</a>
+  </div>
+
+  <div class="panel">
+    <div style="overflow:auto;border:1px solid var(--stroke);border-radius:12px">
+      <table style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr style="background:rgba(255,255,255,.03)">
+            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">Code</th>
+            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">Player</th>
+            <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--stroke)">Clicks</th>
+            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rc, name, email in rows %}
+          <tr>
+            <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">{{ rc.code }}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">{{ name or email }}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid var(--stroke);text-align:right">{{ rc.clicks or 0 }}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">{{ rc.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" style="padding:10px 12px">No referrals yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,481 @@
+{% extends "base.html" %}
+
+{% block hero %}
+{# --- Scrolling News Banner (admin-controlled) --- #}
+{% set has_any = (promo_line1 or promo_line2 or (bonus_percent is not none) or (settings and settings.bonus_percent)) %}
+{% if has_any %}
+<div class="news-ticker" aria-label="Site announcements">
+  <div class="news-mask news-mask--left" aria-hidden="true"></div>
+
+  <div class="shell news-inner">
+    <div class="news-track" id="newsTrack">
+      {% if promo_line1 %}
+        <span class="news-item">{{ promo_line1 }}</span>
+      {% endif %}
+      {% if promo_line2 %}
+        {% if promo_line1 %}<span class="news-sep">•</span>{% endif %}
+        <span class="news-item">{{ promo_line2 }}</span>
+      {% endif %}
+      {% set bp = bonus_percent if bonus_percent is not none else (settings.bonus_percent if settings else 0) %}
+      {% if bp and bp|int > 0 %}
+        <span class="news-sep">•</span>
+        <span class="news-item">💎 +{{ bp|int }}% bonus on credit loads</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="news-mask news-mask--right" aria-hidden="true"></div>
+</div>
+
+<style>
+/* --- Ticker Banner --- */
+.news-ticker{
+  position:relative;
+  width:100%;
+  background: rgba(18,20,25,.95);
+  border-bottom: 1px solid var(--stroke, #2a2e37);
+  overflow:hidden;
+  box-shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.18);
+}
+.news-inner{ position:relative; white-space:nowrap; overflow:hidden; padding:10px 0; }
+.news-track{ display:inline-block; will-change: transform; animation: news-marquee var(--marquee-duration, 20s) linear infinite; }
+.news-item{ display:inline-flex; align-items:center; gap:.35rem; padding:0 .75rem; font-weight:700; letter-spacing:.2px; }
+.news-sep{ opacity:.55; padding:0 .35rem; }
+.news-mask{ position:absolute; top:0; bottom:0; width:60px; pointer-events:none; z-index:1; background: linear-gradient(to right, rgba(18,20,25,1) 0%, rgba(18,20,25,0) 100%); }
+.news-mask--right{ right:0; transform: scaleX(-1); }
+.news-mask--left{ left:0; }
+@keyframes news-marquee{ 0%{ transform: translateX(0); } 100%{ transform: translateX(var(--marquee-distance, -50%)); } }
+.news-ticker:hover .news-track{ animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce){ .news-track{ animation: none; } }
+
+/* --- page-scoped mobile helpers (desktop untouched) --- */
+.hide-mobile{ display:block !important; }
+.show-mobile{ display:none !important; }
+@media (max-width: 768px){
+  .hide-mobile{ display:none !important; }
+  .show-mobile{ display:block !important; }
+}
+</style>
+
+<script>
+/* Responsive marquee */
+document.addEventListener("DOMContentLoaded", () => {
+  const track = document.getElementById("newsTrack");
+  if(!track) return;
+
+  const container = track.parentElement;
+  const baseHTML = track.innerHTML.trim();
+  if (!baseHTML) return;
+
+  let clones = 0, maxClones = 10;
+  while (track.scrollWidth < container.clientWidth * 2 && clones < maxClones) {
+    track.insertAdjacentHTML("beforeend", baseHTML);
+    clones++;
+  }
+
+  const pxPerSec = 120;
+  const distance = track.scrollWidth / 2;
+  const duration = Math.max(12, Math.round(distance / pxPerSec));
+  track.style.setProperty("--marquee-distance", `-${distance}px`);
+  track.style.setProperty("--marquee-duration", `${duration}s`);
+
+  let t;
+  window.addEventListener("resize", () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      track.style.animation = "none";
+      track.innerHTML = baseHTML;
+      let clones2 = 0;
+      while (track.scrollWidth < container.clientWidth * 2 && clones2 < maxClones) {
+        track.insertAdjacentHTML("beforeend", baseHTML);
+        clones2++;
+      }
+      const d2 = track.scrollWidth / 2;
+      const dur2 = Math.max(12, Math.round(d2 / 120));
+      track.style.setProperty("--marquee-distance", `-${d2}px`);
+      track.style.setProperty("--marquee-duration", `${dur2}s`);
+      requestAnimationFrame(() => { track.style.animation = ""; });
+    }, 150);
+  });
+});
+</script>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<style>
+  /* ====== Credits pill near the game icon ====== */
+  .game-card .game-media{position:relative}
+  .gv-balance-pill{
+    position:absolute; left:14px; top:14px;
+    padding:5px 12px; border-radius:999px;
+    font-size:12px; font-weight:800; letter-spacing:.2px;
+    color:#fff; background:linear-gradient(135deg,#1ad1a5,#16c2ff);
+    box-shadow:0 10px 26px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.06) inset;
+    backdrop-filter:saturate(120%) blur(2px);
+    pointer-events:none; user-select:none;
+  }
+  @media (max-width:520px){
+    .gv-balance-pill{font-size:11px; padding:4px 10px; left:10px; top:10px}
+  }
+
+  /* ====== per-card inline loader for "Request ID" ====== */
+  .game-card {
+    position: relative;
+  }
+  .gc-card-loading {
+    position: absolute;
+    inset: 0;
+    background: rgba(7, 9, 12, .72);
+    backdrop-filter: blur(1.5px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    z-index: 50;
+    border-radius: 16px;
+    text-align: center;
+    flex-direction: column;
+    font-size: 12px;
+  }
+  .gc-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,.2);
+    border-top-color: #12d9a1;
+    border-radius: 999px;
+    animation: gcspin .65s linear infinite;
+  }
+  @keyframes gcspin {
+    to { transform: rotate(360deg); }
+  }
+</style>
+
+<div class="shell grid-page" style="margin-top:14px">
+
+  <!-- Left rail -->
+  <aside class="rail">
+    <div class="rail-card">
+      <div class="rail-title">Add Funds</div>
+      {% if current_user.is_authenticated %}
+        <a class="btn btn-primary btn-wide" href="{{ url_for('playerbp.deposit_step1') }}">Add Credits</a>
+        <div class="method-row" style="margin-top:10px">
+          <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}">Chime</a>
+          <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}">Crypto</a>
+        </div>
+        <div class="rail-sub">Crypto &amp; Chime supported.</div>
+      {% else %}
+        <a class="btn btn-primary btn-wide" href="{{ url_for('auth.register_get') }}">Create account to add funds</a>
+        <div class="rail-sub">Sign in to deposit with Crypto or Chime.</div>
+      {% endif %}
+    </div>
+
+    <div class="rail-card">
+      <div class="rail-title">Withdraw</div>
+      {% if current_user.is_authenticated %}
+        <a class="btn btn-wide" href="{{ url_for('playerbp.withdraw_get') }}">Request Payout</a>
+        {% if settings %}
+          <div class="rail-sub">Min: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>
+        {% endif %}
+      {% else %}
+        <a class="btn btn-wide" href="{{ url_for('auth.login_get') }}">Sign in</a>
+        <div class="rail-sub">Withdrawals require an account.</div>
+      {% endif %}
+    </div>
+
+    <div class="rail-card hide-mobile" id="contact">
+      <div class="rail-title">Contact Us</div>
+      {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/+12342795662') %}
+      {% set tg = (settings.telegram_url if settings and settings.telegram_url else 'https://t.me/Neonspire') %}
+      {% set fb = (settings.facebook_url if settings and settings.facebook_url else 'https://www.facebook.com/neonspirecas') %}
+      {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/neonspirecasino') %}
+      <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener noreferrer" data-external="1">WhatsApp</a>
+        <a class="btn btn-mini btn-wide" href="{{ tg }}" target="_blank" rel="noopener noreferrer" data-external="1">Telegram</a>
+        <a class="btn btn-mini btn-wide" href="{{ fb }}" target="_blank" rel="noopener noreferrer" data-external="1">Facebook</a>
+        <a class="btn btn-mini btn-wide" href="{{ ig }}" target="_blank" rel="noopener noreferrer" data-external="1">Instagram</a>
+      </div>
+      <div class="rail-sub" style="margin-top:8px">We’re available 24/7.</div>
+    </div>
+
+    {% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
+    <div class="rail-card hide-mobile">
+      <div class="rail-title">Referral Program</div>
+      <button type="button" class="btn btn-wide js-ref-btn">Get My Link</button>
+    </div>
+    {% endif %}
+  </aside>
+
+  <!-- Main column -->
+  <section>
+    <div class="panel">
+      <div class="panel-head">
+        <div class="h3">Today’s Trending</div>
+        <div class="muted">Updated live</div>
+      </div>
+      <div class="chip-row">
+        {% for tg in trending_games %}
+          <span class="chip" title="{{ tg.name }}">
+            {% if tg.icon_url %}<img class="chip-icon" src="{{ tg.icon_url }}" alt="{{ tg.name }}">{% endif %}
+            {{ tg.name }}
+          </span>
+        {% else %}
+          <span class="muted">No games yet.</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div class="h3">Games</div>
+        {% if settings %}
+          <div class="muted">Min withdraw: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>
+        {% endif %}
+      </div>
+
+      <div class="game-grid">
+        {% for g in games %}
+          <article class="game-card">
+            <div class="game-media">
+              {% if g.icon_url %}
+                <img src="{{ g.icon_url }}" alt="{{ g.name }}">
+              {% else %}
+                <div class="media-fallback">🎮</div>
+              {% endif %}
+
+              {# ---- Credits pill (uses gv_balances from app.py) ---- #}
+              {% set bal = (gv_balances.get(g.id, 0) if gv_balances is defined else 0) | int %}
+              {% set show_for_this_game = True %}
+              {% if current_user.is_authenticated and show_for_this_game and bal > 0 %}
+                <div class="gv-balance-pill" aria-label="Game credits">
+                  Credits: {{ bal }}
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="game-body">
+              <div class="game-title" title="{{ g.name }}">{{ g.name }}</div>
+              <div class="game-sub" title="{{ g.description or '' }}">{{ g.description or "Hottest game on the market" }}</div>
+            </div>
+
+            <div class="game-actions">
+              {% if g.download_url %}
+                <a class="btn btn-mini" target="_blank" href="{{ g.download_url }}">Download</a>
+              {% else %}
+                <button class="btn btn-mini" disabled>Download</button>
+              {% endif %}
+
+              {% if current_user.is_authenticated %}
+                <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}?game_id={{ g.id }}">Deposit</a>
+                <a class="btn btn-mini" href="{{ url_for('playerbp.withdraw_get') }}?game_id={{ g.id }}">Withdraw</a>
+
+                {# UPDATED: show per-card loading on submit #}
+                <form
+                  method="post"
+                  action="{{ url_for('playerbp.request_game_account', game_id=g.id) }}"
+                  data-request-id-form
+                >
+                  {% if csrf_token is defined %}
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  {% endif %}
+                  <button class="btn btn-mini btn-primary" type="submit" data-request-btn>
+                    Request ID
+                  </button>
+                </form>
+              {% else %}
+                <a class="btn btn-mini" href="{{ url_for('auth.login_get') }}">Deposit</a>
+                <a class="btn btn-mini" href="{{ url_for('auth.login_get') }}">Withdraw</a>
+                <a class="btn btn-mini btn-primary" href="{{ url_for('auth.register_get') }}">Request ID</a>
+              {% endif %}
+            </div>
+
+            {# overlay specific to THIS game card #}
+            <div class="gc-card-loading" data-loading-overlay>
+              <div class="gc-spinner" aria-hidden="true"></div>
+              <div>Please wait, your ID is being processed…</div>
+            </div>
+          </article>
+        {% else %}
+          <div class="muted">No games available yet. Please check back soon.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# ===== MOBILE ONLY: Contact Us + Referral BELOW the game list ===== #}
+    <div class="show-mobile" style="display:none">
+      <div class="panel" id="contact-mobile">
+        <div class="rail-title">Contact Us</div>
+        {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/+12342795662') %}
+        {% set tg = (settings.telegram_url if settings and settings.telegram_url else 'https://t.me/Neonspire') %}
+        {% set fb = (settings.facebook_url if settings and settings.facebook_url else 'https://www.facebook.com/neonspirecas') %}
+        {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/neonspirecasino') %}
+        <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener noreferrer" data-external="1">WhatsApp</a>
+          <a class="btn btn-mini btn-wide" href="{{ tg }}" target="_blank" rel="noopener noreferrer" data-external="1">Telegram</a>
+          <a class="btn btn-mini btn-wide" href="{{ fb }}" target="_blank" rel="noopener noreferrer" data-external="1">Facebook</a>
+          <a class="btn btn-mini btn-wide" href="{{ ig }}" target="_blank" rel="noopener noreferrer" data-external="1">Instagram</a>
+        </div>
+        <div class="muted" style="margin-top:8px">We’re available 24/7.</div>
+      </div>
+
+      {% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
+      <div class="panel">
+        <div class="rail-title">Referral Program</div>
+        <button type="button" class="btn btn-wide js-ref-btn">Get My Link</button>
+      </div>
+      {% endif %}
+    </div>
+
+  </section>
+</div>
+
+{# ---- External link fail-safe ---- #}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  function isExternal(href) {
+    try { const u = new URL(href, window.location.href); return u.origin !== window.location.origin; }
+    catch { return false; }
+  }
+  document.querySelectorAll('a[data-external], a[target="_blank"]').forEach(function (a) {
+    if (!isExternal(a.href)) return;
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      try { window.open(a.href, '_blank', 'noopener'); }
+      catch (_) { window.location.href = a.href; }
+      return false;
+    }, { capture: true });
+  });
+});
+</script>
+
+{# ============================ REFERRAL POPUP & JS (only for players) ============================ #}
+{% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
+<div id="refModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="refTitle"
+     style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:9999;">
+  <div data-ref-overlay
+       style="position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:saturate(120%) blur(2px)"></div>
+
+  <div class="panel" role="document"
+       style="position:relative;max-width:640px;width:92%;border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.35);z-index:1">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+      <div id="refTitle" class="h3">Your Referral Link</div>
+      <button type="button" class="btn btn-ghost" id="refCloseBtn" aria-label="Close">✕</button>
+    </div>
+
+    <div id="refBody">
+      <div id="refLoading" class="muted">Generating your link…</div>
+
+      <div id="refResult" style="display:none">
+        <div class="muted" style="margin:0 0 8px 0">
+          Share this link. It includes your code <b id="refCodeText">—</b>.
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">
+          <input id="refLinkInput" class="input" readonly value="">
+          <button class="btn btn-primary" type="button" id="copyRefBtn">Copy</button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap">
+          <a id="openRefBtn" class="btn" href="#" target="_blank" rel="noopener">Open</a>
+          <button class="btn btn-ghost" type="button" id="newRefBtn">Regenerate</button>
+        </div>
+
+        <div class="muted" style="margin-top:8px;font-size:12px">
+            Refer your friends and family to get exciting bonus 🎁
+        </div>
+      </div>
+
+      <div id="refError" style="display:none;color:#ff8a8a">Couldn’t get your link. Please try again.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const modal   = document.getElementById('refModal');
+  const triggers = document.querySelectorAll('.js-ref-btn');
+  if(!modal || !triggers.length) return;
+
+  const closeBtn   = document.getElementById('refCloseBtn');
+  const overlay    = modal.querySelector('[data-ref-overlay]');
+  const loadingEl  = document.getElementById('refLoading');
+  const resultEl   = document.getElementById('refResult');
+  const errorEl    = document.getElementById('refError');
+  const inputEl    = document.getElementById('refLinkInput');
+  const codeEl     = document.getElementById('refCodeText');
+  const copyBtn    = document.getElementById('copyRefBtn');
+  const openBtn    = document.getElementById('openRefBtn');
+  const regenBtn   = document.getElementById('newRefBtn');
+
+  function openModal(){ modal.style.display = 'flex'; document.body.style.overflow = 'hidden'; }
+  function closeModal(){ modal.style.display = 'none'; document.body.style.overflow = ''; }
+  function setState(state){
+    loadingEl.style.display = state==='loading' ? '' : 'none';
+    resultEl.style.display  = state==='result'  ? '' : 'none';
+    errorEl.style.display   = state==='error'   ? '' : 'none';
+  }
+
+  async function fetchRef(jsonUrl){
+    setState('loading');
+    try{
+      const r = await fetch(jsonUrl, {credentials:'same-origin', headers:{'Accept':'application/json'}});
+      if(!r.ok) throw new Error('bad response');
+      const data = await r.json();
+      inputEl.value = data.link || '';
+      codeEl.textContent = data.code || '—';
+      openBtn.href = data.link || '#';
+      setState('result');
+    }catch(e){ setState('error'); }
+  }
+
+  triggers.forEach(btn => {
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      openModal();
+      fetchRef("{{ url_for('playerbp.referral_my_link_json') }}");
+    });
+  });
+
+  if(regenBtn){
+    regenBtn.addEventListener('click', ()=>{ fetchRef("{{ url_for('playerbp.referral_my_link_json') }}?force=1"); });
+  }
+
+  copyBtn.addEventListener('click', async ()=>{
+    try{
+      inputEl.select(); inputEl.setSelectionRange(0, 99999);
+      if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(inputEl.value); }
+      else { document.execCommand('copy'); }
+      copyBtn.textContent = 'Copied!'; setTimeout(()=>copyBtn.textContent='Copy', 1200);
+    }catch(_){ alert('Copied!'); }
+  });
+
+  [closeBtn, overlay].forEach(el => el.addEventListener('click', closeModal));
+  document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && modal.style.display === 'flex'){ closeModal(); } });
+})();
+</script>
+
+<script>
+  // NEW: per-card loading when "Request ID" is clicked
+  (function () {
+    const forms = document.querySelectorAll('[data-request-id-form]');
+    if (!forms.length) return;
+    forms.forEach(function (form) {
+      form.addEventListener('submit', function () {
+        const card = form.closest('.game-card');
+        const overlay = card ? card.querySelector('[data-loading-overlay]') : null;
+        const btn = form.querySelector('[data-request-btn]');
+        if (overlay) {
+          overlay.style.display = 'flex';
+        }
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Processing...';
+        }
+      });
+    });
+  })();
+</script>
+{% endif %}
+{% endblock %}

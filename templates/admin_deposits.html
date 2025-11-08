@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="shell">
+
+  <!-- Header -->
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <div style="font-weight:900;font-size:22px">Admin • Deposits</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <a class="btn" href="{{ url_for('adminbp.admin_home') }}">Overview</a>
+      <a class="btn" href="{{ url_for('adminbp.settings_get') }}">Settings</a>
+      <a class="btn" href="{{ url_for('adminbp.games_list') }}">Manage Games</a>
+    </div>
+  </div>
+
+  <!-- Pending -->
+  <div class="panel">
+    <div class="h3">Pending Deposits</div>
+    {% if pending and pending|length %}
+      <div style="overflow:auto;border:1px solid var(--stroke);border-radius:12px;margin-top:10px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:rgba(255,255,255,.03)">
+              <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">ID</th>
+              <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">User</th>
+              <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">Amount</th>
+              <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">Method</th>
+              <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">Proof</th>
+              <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--stroke)">Created</th>
+              <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--stroke)">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for d in pending %}
+            <tr>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">#{{ d.id }}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">User#{{ d.user_id }}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">{{ d.amount }}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">{{ d.method or '—' }}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">
+                {% if d.proof_url %}
+                  <a href="{{ d.proof_url }}" target="_blank">open</a>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--stroke)">
+                {% if d.created_at %}{{ d.created_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}
+              </td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--stroke);text-align:right">
+                <!-- IMPORTANT: action must be 'loaded' to match admin_bp.deposit_mark -->
+                <form method="post" action="{{ url_for('adminbp.deposit_mark', dep_id=d.id, action='loaded') }}" style="display:inline">
+                  <button class="btn btn-primary" type="submit">Approve</button>
+                </form>
+                <form method="post" action="{{ url_for('adminbp.deposit_mark', dep_id=d.id, action='reject') }}" style="display:inline">
+                  <button class="btn" type="submit">Reject</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="muted">No pending deposits.</div>
+    {% endif %}
+  </div>
+
+  <!-- Recent Completed (optional; will only render if 'recent' provided) -->
+  {% if recent is defined %}
+  <div class="panel">
+    <div class="h3">Recent Completed</div>
+    {% if recent and recent|length %}
+      <ul style="margin:8px 0 0 18px">
+        {% for r in recent %}
+          <li>
+            #{{ r.id }} — +{{ r.credited_amount or r.amount }}
+            to User#{{ r.user_id }} ({{ r.method or '—' }})
+            {% if r.loaded_at %} • {{ r.loaded_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="muted">Nothing yet.</div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
