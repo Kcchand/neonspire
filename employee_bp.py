@@ -862,16 +862,36 @@ def withdrawals_list():
     def build_rows(rows):
         if not rows:
             return []
+
         u_ids = list({r.user_id for r in rows if r.user_id})
         g_ids = list({r.game_id for r in rows if r.game_id})
 
-        users = {u.id: u for u in User.query.filter(User.id.in_(u_ids)).all()} if u_ids else {}
-        games = {g.id: g for g in Game.query.filter(Game.id.in_(g_ids)).all()} if g_ids else {}
-        wallets = {w.user_id: w for w in PlayerBalance.query.filter(PlayerBalance.user_id.in_(u_ids)).all()} if u_ids else {}
+        users = (
+            {u.id: u for u in User.query.filter(User.id.in_(u_ids)).all()}
+            if u_ids
+            else {}
+        )
+        games = (
+            {g.id: g for g in Game.query.filter(Game.id.in_(g_ids)).all()}
+            if g_ids
+            else {}
+        )
+        wallets = (
+            {
+                w.user_id: w
+                for w in PlayerBalance.query.filter(
+                    PlayerBalance.user_id.in_(u_ids)
+                ).all()
+            }
+            if u_ids
+            else {}
+        )
 
-        acc_map = {}
+        acc_map: dict[int, list[GameAccount]] = {}
         if u_ids:
-            acc_rows = GameAccount.query.filter(GameAccount.user_id.in_(u_ids)).all()
+            acc_rows = GameAccount.query.filter(
+                GameAccount.user_id.in_(u_ids)
+            ).all()
             for a in acc_rows:
                 acc_map.setdefault(a.user_id, []).append(a)
 
@@ -882,34 +902,96 @@ def withdrawals_list():
             vendor = _vendor_from_game(game)
             login_user = None
 
+            # Always attach a details dict so Jinja can safely use w.details
+            w.details = {}
+
+            # Decode meta into details (CHIME / CRYPTO extra info)
+            meta = {}
+            try:
+                if isinstance(w.meta, dict):
+                    meta = w.meta
+                elif w.meta:
+                    meta = json.loads(w.meta)
+            except Exception:
+                meta = {}
+
+            method = (w.method or "").upper()
+            if method == "CHIME":
+                w.details["payer_name"] = meta.get("payer_name", "")
+                w.details["payer_handle"] = (
+                    meta.get("payer_handle")
+                    or meta.get("payer_contact")
+                    or meta.get("chime_handle")
+                    or ""
+                )
+            elif method == "CRYPTO":
+                w.details["wallet"] = (
+                    meta.get("payer_wallet")
+                    or meta.get("payer_address")
+                    or meta.get("crypto_from")
+                    or ""
+                )
+                w.details["network"] = meta.get("network") or meta.get("chain") or ""
+
+            # Login lookup
             if w.game_id:
                 login_user = _get_login_username(w.user_id, w.game_id)
 
             if not login_user:
                 opts = acc_map.get(w.user_id, [])
                 pick = None
+
                 if vendor:
                     for a in opts:
-                        g = games.get(getattr(a, "game_id", None)) or db.session.get(Game, getattr(a, "game_id", None))
+                        g = (
+                            games.get(getattr(a, "game_id", None))
+                            or db.session.get(Game, getattr(a, "game_id", None))
+                        )
                         if _vendor_from_game(g) == vendor:
                             pick = a
                             break
+
                 if not pick and opts:
                     pick = opts[0]
+
                 if pick:
-                    login_user = _first_attr(pick, "account_username", "username", "login", "user", default="") or None
+                    login_user = (
+                        _first_attr(
+                            pick,
+                            "account_username",
+                            "username",
+                            "login",
+                            "user",
+                            default="",
+                        )
+                        or None
+                    )
                     if not vendor:
-                        g = games.get(getattr(pick, "game_id", None)) or db.session.get(Game, getattr(pick, "game_id", None))
+                        g = (
+                            games.get(getattr(pick, "game_id", None))
+                            or db.session.get(
+                                Game, getattr(pick, "game_id", None)
+                            )
+                        )
                         vendor = _vendor_from_game(g)
 
-            out.append({
-                "wd": w,
-                "user_name": _display_name(user) if user else f"User #{w.user_id}",
-                "game_name": (game.name if game else "—"),
-                "vendor": vendor or "unknown",
-                "login_user": login_user or "",
-                "wallet_balance": (wallets.get(w.user_id).balance if wallets.get(w.user_id) else 0),
-            })
+            out.append(
+                {
+                    "wd": w,
+                    "user_name": _display_name(user)
+                    if user
+                    else f"User #{w.user_id}",
+                    "game_name": game.name if game else "—",
+                    "vendor": vendor or "unknown",
+                    "login_user": login_user or "",
+                    "wallet_balance": (
+                        wallets.get(w.user_id).balance
+                        if wallets.get(w.user_id)
+                        else 0
+                    ),
+                }
+            )
+
         return out
 
     return render_template(

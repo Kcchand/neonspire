@@ -32,6 +32,12 @@ class User(db.Model, UserMixin):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # telegram (optional, for mini-app + staff dashboard)
+    telegram_id        = db.Column(db.BigInteger, unique=True, nullable=True, index=True)
+    telegram_username  = db.Column(db.String(64), nullable=True, index=True)
+    telegram_firstname = db.Column(db.String(120), nullable=True)
+    telegram_lastname  = db.Column(db.String(120), nullable=True)
+
     def set_password(self, pw: str):
         self.password_hash = generate_password_hash(pw)
 
@@ -196,8 +202,18 @@ class WithdrawRequest(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     game_id = db.Column(db.Integer, db.ForeignKey("games.id"), nullable=True, index=True)
     amount = db.Column(db.Integer, nullable=False)
+
+    # 👉 optional breakdown (you’re setting these in player_bp.py)
+    total_amount = db.Column(db.Integer, nullable=True)
+    keep_amount  = db.Column(db.Integer, nullable=True)
+    tip_amount   = db.Column(db.Integer, nullable=True)
+
     status = db.Column(db.String(20), default="PENDING", index=True)  # PENDING | APPROVED | REJECTED | PAID
     method = db.Column(db.String(20), default="MANUAL")
+
+    # 👉 this is what employee dashboard template uses: w.address
+    address = db.Column(db.String(255), nullable=True)
+
     note = db.Column(db.String(300), default="")
     acted_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     acted_at = db.Column(db.DateTime, nullable=True)

@@ -1229,6 +1229,19 @@ def poll_new_items(context: CallbackContext):
 
                 user = db.session.get(User, dep.user_id) if dep.user_id else None
                 game = db.session.get(Game, dep.game_id) if dep.game_id else None
+                settings = db.session.get(PaymentSettings, 1)
+
+                # decode meta safely
+                meta = {}
+                try:
+                    if isinstance(dep.meta, dict):
+                        meta = dep.meta
+                    elif dep.meta:
+                        meta = json.loads(dep.meta)
+                except Exception:
+                    meta = {}
+
+                method = (dep.method or "").upper()
 
                 text_msg = (
                     f"💰 *New deposit* #{dep.id}\n"
@@ -1237,6 +1250,41 @@ def poll_new_items(context: CallbackContext):
                     f"Method: {dep.method or '-'}\n"
                     f"Game: {game.name if game else '-'}\n"
                 )
+
+                # ---- CHIME extra info ----
+                if method == "CHIME":
+                    payer_name = (meta.get("payer_name") or "").strip()
+                    payer_handle = (
+                        meta.get("payer_handle")
+                        or meta.get("payer_contact")
+                        or meta.get("chime_handle")
+                        or ""
+                    ).strip()
+
+                    # same fallback as card: global CHIME handle from PaymentSettings
+                    if not (payer_name or payer_handle) and settings and getattr(settings, "chime_handle", None):
+                        payer_handle = settings.chime_handle
+
+                    if payer_name:
+                        text_msg += f"Name: {payer_name}\n"
+                    if payer_handle:
+                        text_msg += f"Handle: `{payer_handle}`\n"
+
+                # ---- CRYPTO extra info ----
+                elif method == "CRYPTO":
+                    from_addr = (
+                        meta.get("payer_wallet")
+                        or meta.get("payer_address")
+                        or meta.get("crypto_from")
+                        or ""
+                    ).strip()
+                    net = (meta.get("network") or meta.get("chain") or "").strip()
+
+                    if from_addr:
+                        text_msg += f"From: `{from_addr}`\n"
+                    if net:
+                        text_msg += f"Network: {net}\n"
+
                 kb = InlineKeyboardMarkup(
                     [
                         [
@@ -1275,6 +1323,7 @@ def poll_new_items(context: CallbackContext):
 
                 user = db.session.get(User, wd.user_id) if wd.user_id else None
                 game = db.session.get(Game, wd.game_id) if wd.game_id else None
+                wallet = PlayerBalance.query.filter_by(user_id=wd.user_id).first()
 
                 text_msg = (
                     f"💸 *New withdrawal* #{wd.id}\n"
@@ -1283,6 +1332,29 @@ def poll_new_items(context: CallbackContext):
                     f"Method: {wd.method or '-'}\n"
                     f"Game: {game.name if game else '-'}\n"
                 )
+
+                # same style as withdrawal card
+                if wallet and wallet.balance is not None:
+                    text_msg += f"Wallet: *{int(wallet.balance)}*\n"
+
+                if getattr(wd, "total_amount", None):
+                    text_msg += f"Total: *{wd.total_amount}*\n"
+                if getattr(wd, "keep_amount", None):
+                    text_msg += f"Keep in wallet: *{wd.keep_amount}*\n"
+                if getattr(wd, "tip_amount", None) and wd.tip_amount > 0:
+                    text_msg += f"Tip: *{wd.tip_amount}*\n"
+
+                addr = (getattr(wd, "address", "") or "").strip()
+                if addr:
+                    method = (wd.method or "").upper()
+                    if method == "CRYPTO":
+                        label = "Address"
+                    elif method == "CHIME":
+                        label = "Chime"
+                    else:
+                        label = "Destination"
+                    text_msg += f"{label}: `{addr}`\n"
+
                 kb = InlineKeyboardMarkup(
                     [
                         [
@@ -1401,6 +1473,31 @@ def poll_new_items(context: CallbackContext):
         log.exception("poll_new_items crashed: %s", e)
 
 
+# ================== EXTERNAL HELPER (for Flask) ==================
+def notify_withdraw_request(user, amount, method, address, game_name):
+    """
+    Called from Flask when a player submits a withdrawal request.
+    Sends formatted message to all staff Telegram IDs.
+    """
+    try:
+        from telegram import Bot
+        bot = Bot(token=TOKEN)
+        msg = (
+            f"💸 *New Withdrawal Request*\n"
+            f"👤 Player: `{user.username}` (id {user.id})\n"
+            f"🎮 Game: {game_name}\n"
+            f"💰 Amount: *${amount}*\n"
+            f"🏦 Method: {method}\n"
+            f"📤 Destination: `{address}`\n"
+            f"⏳ Status: Pending approval"
+        )
+        for sid in STAFF_IDS:
+            try:
+                bot.send_message(chat_id=sid, text=msg, parse_mode="Markdown")
+            except Exception as inner_e:
+                log.warning("Failed to send withdraw alert to %s: %s", sid, inner_e)
+    except Exception as e:
+        log.warning("notify_withdraw_request() failed: %s", e)
 # ================== MAIN ==================
 def main():
     if not TOKEN:

@@ -1,0 +1,17 @@
+app.py
+auth.py
+employee_bp.py
+models.py
+player_bp.py
+telegram_bot.py
+telegram_bp.py
+nowpayments_client.py
+templates/base.html
+templates/employee_deposits.html
+templates/employee_withdrawals.html
+templates/index.html
+templates/player_accounts.html
+templates/player_deposit_step1.html
+templates/player_deposit_step2.html
+templates/error.html
+templates/tg_start.html

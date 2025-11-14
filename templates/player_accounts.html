@@ -126,46 +126,7 @@
     </div>
   </div>
 
-  <!-- Requests -->
-  <div class="panel" style="margin-top:12px">
-    <div class="panel-head">
-      <div class="h3">Access Requests</div>
-      <div class="muted">Current and recent</div>
-    </div>
-
-    <div class="table">
-      <div class="t-head">
-        <div>Game</div>
-        <div>Status</div>
-        <div class="t-right">Requested</div>
-      </div>
-
-      {% if requests %}
-        {% for r in requests %}
-          {% set s = (r.status or 'PENDING')|upper %}
-          <div class="t-row">
-            <div>{{ r.game|e }}</div>
-            <div>
-              {% if s == 'APPROVED' %}
-                <span class="chip-ok">✅ Approved</span>
-              {% elif s == 'IN_PROGRESS' %}
-                <span class="chip-warn">⏳ In progress</span>
-              {% elif s == 'REJECTED' %}
-                <span class="chip-bad">❌ Rejected</span>
-              {% else %}
-                <span class="chip-pending">🧑‍💻 Pending</span>
-              {% endif %}
-            </div>
-            <div class="t-right">
-              {{ r.created_at.strftime('%b %d, %Y %H:%M') if r.created_at else '—' }}
-            </div>
-          </div>
-        {% endfor %}
-      {% else %}
-        <div class="empty muted">No requests yet.</div>
-      {% endif %}
-    </div>
-  </div>
+ 
 
 </div>
 

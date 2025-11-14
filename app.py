@@ -1,13 +1,21 @@
 import os
-from flask import Flask, render_template, redirect, url_for, jsonify
+from flask import Flask, render_template, redirect, url_for, jsonify, request
 from dotenv import load_dotenv
 load_dotenv()
+# ✅ Force load from current project folder instead of other .env files
+dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path=dotenv_path)
+print("✅ Loaded .env from:", dotenv_path)
+print("✅ TELEGRAM_BOT_TOKEN (first 15):", os.getenv("TELEGRAM_BOT_TOKEN")[:15])
 from flask_login import LoginManager, current_user
 from sqlalchemy import text, inspect as sqla_inspect
 from flask_socketio import SocketIO, emit
 from flask_mail import Mail
 from gv_keepalive import start_keepalive_background
 start_keepalive_background()
+from telegram_bp import telegram_bp
+import secrets
+from flask_login import login_user
 
 # models (import every model that needs a table so create_all() sees them)
 from models import (
@@ -182,7 +190,20 @@ def create_app():
                 db.session.add(wallet)
                 db.session.commit()
 
-        return dict(unread_count=cnt, settings=settings, wallet=wallet)
+        # 👇 detect if this request is coming from the Telegram mini app
+                # 👇 detect if this request is coming from the Telegram mini app
+        is_telegram = (
+            request.cookies.get("is_telegram") == "1"
+            or request.args.get("tg") == "1"
+            or request.path.startswith("/tg/")
+        )
+
+        return dict(
+            unread_count=cnt,
+            settings=settings,
+            wallet=wallet,
+            is_telegram=is_telegram,
+        )
 
     # ------------------ blueprints ------------------
     app.register_blueprint(auth_bp)
@@ -192,8 +213,10 @@ def create_app():
     app.register_blueprint(notify_bp)
     app.register_blueprint(player_bp)
     app.register_blueprint(short_bp)
+    app.register_blueprint(telegram_bp)
     if chat_bp:
         app.register_blueprint(chat_bp)
+        
         
 
     # ------------------ Helpful vanity paths ------------------
@@ -243,6 +266,9 @@ def create_app():
                 if gid in by_id:
                     trending_games.append(by_id[gid])
 
+        # 🔹 default – no logins if user is anonymous
+        game_login_ids = []
+
         # ---------- public (not signed in) ----------
         if not current_user.is_authenticated:
             return render_template(
@@ -254,10 +280,11 @@ def create_app():
                 promo_line2=promo_line2,
                 bonus_percent=bonus_percent,
                 settings=settings,
+                game_login_ids=game_login_ids,  # 🔹 pass empty list
                 page_title="NeonSpire Casino",
             )
 
-        # ---------- signed in ----------
+               # ---------- signed in ----------
         wallet = PlayerBalance.query.filter_by(user_id=current_user.id).first()
         if not wallet:
             wallet = PlayerBalance(user_id=current_user.id, balance=0)
@@ -271,7 +298,14 @@ def create_app():
             if gid is not None:
                 accounts_by_game.setdefault(gid, []).append(a)
 
-        # NEW: build a simple {game_id: balance_int} map for templates
+        # 🔹 which games this user has a game ID for
+        game_login_ids = [
+            getattr(a, "game_id", None)
+            for a in my_accounts
+            if getattr(a, "game_id", None) is not None
+        ]
+
+        # 🔹 build a simple {game_id: balance_int} map for templates
         possible_fields = ("balance", "credits", "amount", "chips", "coins")
         gv_balances = {}
         for a in my_accounts:
@@ -293,10 +327,13 @@ def create_app():
                         pass
             gv_balances[gid] = val
 
+        # 🔹 recent loaded deposits
         recent_credits = (
             DepositRequest.query.filter_by(user_id=current_user.id, status="LOADED")
             .order_by(DepositRequest.loaded_at.desc()).limit(5).all()
         )
+
+        # 🔹 latest notifications
         notes = (
             Notification.query.filter_by(user_id=current_user.id)
             .order_by(Notification.created_at.desc()).limit(10).all()
@@ -308,10 +345,11 @@ def create_app():
             wallet=wallet,
             games=games,
             trending_games=trending_games,
-            accounts_by_game=accounts_by_game,  # still available if you need it elsewhere
-            gv_balances=gv_balances,            # <-- used by template to show Credits pill
+            accounts_by_game=accounts_by_game,
+            gv_balances=gv_balances,         # ✅ now defined
+            game_login_ids=game_login_ids,   # ✅ now defined
             settings=settings,
-            recent_credits=recent_credits,
+            recent_credits=recent_credits,   # ✅ now defined
             notifications=notes,
             promo_line1=promo_line1,
             promo_line2=promo_line2,
@@ -332,6 +370,43 @@ def create_app():
     @socketio.on("connect")
     def _on_connect():
         emit("welcome", {"msg": f"Connected (async={ASYNC_MODE})"})
+
+        # ------------------ Global error handlers ------------------
+    @app.errorhandler(404)
+    def handle_404(err):
+        # Page not found
+        return (
+            render_template(
+                "error.html",
+                status_code=404,
+                message_title="Page not found",
+                message_body="The page you’re looking for doesn’t exist or may have been moved.",
+            ),
+            404,
+        )
+
+    @app.errorhandler(500)
+    def handle_500(err):
+        # Unexpected server error
+        # Log the real error to the console for debugging
+        try:
+            app.logger.exception("Unhandled 500 error: %s", err)
+        except Exception:
+            pass
+
+        return (
+            render_template(
+                "error.html",
+                status_code=500,
+                message_title="Something went wrong",
+                message_body=(
+                    "We’re experiencing an unexpected error. "
+                    "Please refresh the page or try again in a moment. "
+                    "If this keeps happening, contact support so we can help."
+                ),
+            ),
+            500,
+        )
 
     # ------------------ debug: GameVault env quick-check ------------------
     @app.get("/debug/gamevault")
@@ -397,6 +472,22 @@ def create_app():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
                 "ALTER TABLE users ADD COLUMN is_active TINYINT(1) DEFAULT 1",
             )
+
+
+            # 🔹 NEW – telegram columns for mini-app
+        if not _has_col("users", "telegram_id"):
+            _add_col("ALTER TABLE users ADD COLUMN telegram_id BIGINT")
+
+        if not _has_col("users", "telegram_username"):
+            _add_col("ALTER TABLE users ADD COLUMN telegram_username VARCHAR(64)")
+
+        if not _has_col("users", "telegram_firstname"):
+            _add_col("ALTER TABLE users ADD COLUMN telegram_firstname VARCHAR(120)")
+
+        if not _has_col("users", "telegram_lastname"):
+            _add_col("ALTER TABLE users ADD COLUMN telegram_lastname VARCHAR(120)")
+
+        
 
         # --- game_accounts patches ---
         if not _has_col("game_accounts", "issued_by_id"):

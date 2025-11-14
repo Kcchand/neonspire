@@ -155,7 +155,7 @@
               </td>
               <td data-label="Amount">{{ d.amount }}</td>
 
-              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK #}
+              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK (from d.meta) #}
               <td data-label="Method / Details">
                 {% set extra = d.meta or {} %}
                 <div class="muted-wrap">
@@ -273,15 +273,16 @@
               </td>
               <td data-label="Amount">{{ d.amount }}</td>
 
-              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK #}
+              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK (from d.meta) #}
               <td data-label="Method / Details">
+                {% set extra = d.meta or {} %}
                 <div class="muted-wrap">
                   <strong>{{ d.method }}</strong>
-                  {% if d.payer_name %}
-                    <span class="muted">Name: {{ d.payer_name }}</span>
+                  {% if extra.get('payer_name') %}
+                    <span class="muted">Name: {{ extra.get('payer_name') }}</span>
                   {% endif %}
-                  {% if d.payer_details %}
-                    <span class="muted">Details: {{ d.payer_details }}</span>
+                  {% if extra.get('payer_details') %}
+                    <span class="muted">Details: {{ extra.get('payer_details') }}</span>
                   {% endif %}
                   {% if d.proof_url %}
                     <a href="{{ d.proof_url }}" target="_blank" rel="noopener">View proof</a>
@@ -365,15 +366,16 @@
               </td>
               <td data-label="Amount">{{ d.amount }}</td>
 
-              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK #}
+              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK (from d.meta) #}
               <td data-label="Method / Details">
+                {% set extra = d.meta or {} %}
                 <div class="muted-wrap">
                   <strong>{{ d.method }}</strong>
-                  {% if d.payer_name %}
-                    <span class="muted">Name: {{ d.payer_name }}</span>
+                  {% if extra.get('payer_name') %}
+                    <span class="muted">Name: {{ extra.get('payer_name') }}</span>
                   {% endif %}
-                  {% if d.payer_details %}
-                    <span class="muted">Details: {{ d.payer_details }}</span>
+                  {% if extra.get('payer_details') %}
+                    <span class="muted">Details: {{ extra.get('payer_details') }}</span>
                   {% endif %}
                   {% if d.proof_url %}
                     <a href="{{ d.proof_url }}" target="_blank" rel="noopener">View proof</a>
@@ -457,15 +459,16 @@
               </td>
               <td data-label="Amount">{{ d.amount }}</td>
 
-              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK #}
+              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK (from d.meta) #}
               <td data-label="Method / Details">
+                {% set extra = d.meta or {} %}
                 <div class="muted-wrap">
                   <strong>{{ d.method }}</strong>
-                  {% if d.payer_name %}
-                    <span class="muted">Name: {{ d.payer_name }}</span>
+                  {% if extra.get('payer_name') %}
+                    <span class="muted">Name: {{ extra.get('payer_name') }}</span>
                   {% endif %}
-                  {% if d.payer_details %}
-                    <span class="muted">Details: {{ d.payer_details }}</span>
+                  {% if extra.get('payer_details') %}
+                    <span class="muted">Details: {{ extra.get('payer_details') }}</span>
                   {% endif %}
                   {% if d.proof_url %}
                     <a href="{{ d.proof_url }}" target="_blank" rel="noopener">View proof</a>
@@ -545,15 +548,16 @@
               </td>
               <td data-label="Amount">{{ d.amount }}</td>
 
-              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK #}
+              {# 🔹 METHOD + PLAYER PAYMENT DETAILS + PROOF LINK (from d.meta) #}
               <td data-label="Method / Details">
+                {% set extra = d.meta or {} %}
                 <div class="muted-wrap">
                   <strong>{{ d.method }}</strong>
-                  {% if d.payer_name %}
-                    <span class="muted">Name: {{ d.payer_name }}</span>
+                  {% if extra.get('payer_name') %}
+                    <span class="muted">Name: {{ extra.get('payer_name') }}</span>
                   {% endif %}
-                  {% if d.payer_details %}
-                    <span class="muted">Details: {{ d.payer_details }}</span>
+                  {% if extra.get('payer_details') %}
+                    <span class="muted">Details: {{ extra.get('payer_details') }}</span>
                   {% endif %}
                   {% if d.proof_url %}
                     <a href="{{ d.proof_url }}" target="_blank" rel="noopener">View proof</a>

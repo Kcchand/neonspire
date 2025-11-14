@@ -19,16 +19,33 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}?v=dm2">
 
   <style>
-    .brand { display:flex; gap:10px; align-items:center; text-decoration:none; color:inherit; font-weight:900; font-size:22px }
-    .brand-logo { height:30px; width:auto; display:block; filter: drop-shadow(0 0 6px rgba(0,255,233,.45)); }
-    @media (max-width:480px){ .brand-text { font-size:18px } }
+    .brand {
+      display:flex;
+      gap:10px;
+      align-items:center;
+      text-decoration:none;
+      color:inherit;
+      font-weight:900;
+      font-size:22px;
+    }
+    .brand-logo {
+      height:30px;
+      width:auto;
+      display:block;
+      filter: drop-shadow(0 0 6px rgba(0,255,233,.45));
+    }
+    @media (max-width:480px){
+      .brand-text { font-size:18px; }
+    }
 
     /* ===== Hero (banners) slot right under the nav ===== */
-    .hero-slot { position:relative; z-index:2; padding-top:12px; }
-    /* When the child template renders nothing, avoid an empty gap */
+    .hero-slot {
+      position:relative;
+      z-index:2;
+      padding-top:12px;
+    }
     .hero-slot:empty { display:none; }
 
-    /* Ensure nothing above clips the hero area */
     header.nav { overflow:visible; }
   </style>
 </head>
@@ -59,6 +76,7 @@
           {% elif current_user.role == 'EMPLOYEE' %}
             <a class="pill" href="{{ url_for('employeebp.employee_home') }}">Employee</a>
           {% else %}
+            {# PLAYER nav: Lobby + My Logins (Support comes from widget include) #}
             <a class="pill" href="{{ url_for('short_bp.mylogin_clean') }}">My Logins</a>
           {% endif %}
 
@@ -67,10 +85,17 @@
           <span class="pill" style="pointer-events:none;opacity:.85">
             Hi, {{ current_user.name.split(' ')[0] if current_user.name else 'Player' }}
           </span>
-          <a class="btn btn-ghost" href="{{ url_for('auth.logout') }}">Logout</a>
+
+          {# In Telegram mini-app we auto-login, so hide Logout button there #}
+          {% if not is_telegram %}
+            <a class="btn btn-ghost" href="{{ url_for('auth.logout') }}">Logout</a>
+          {% endif %}
         {% else %}
-          <a class="pill" href="{{ url_for('auth.login_get') }}">Login</a>
-          <a class="btn btn-primary" href="{{ url_for('short_bp.reg_short') }}">Register</a>
+          {# In Telegram mini-app we auto-login, so hide Login/Register there #}
+          {% if not is_telegram %}
+            <a class="pill" href="{{ url_for('auth.login_get') }}">Login</a>
+            <a class="btn btn-primary" href="{{ url_for('short_bp.reg_short') }}">Register</a>
+          {% endif %}
         {% endif %}
 
         <!-- Dark mode toggle -->
@@ -83,7 +108,7 @@
     </div>
   </header>
 
-  <!-- ===== Hero/Banners directly under the nav ===== -->
+  <!-- Hero / banners directly under the nav -->
   <div class="hero-slot">
     {% block hero %}{% endblock %}
   </div>
@@ -108,7 +133,9 @@
       {% if error %}
         <div class="panel" style="border-color:rgba(255,93,93,.55)">
           <div class="h3">⚠️ {{ error }}</div>
-          <div class="muted" style="margin-top:6px">If this looks wrong, sign in with the correct role or contact support.</div>
+          <div class="muted" style="margin-top:6px">
+            If this looks wrong, sign in with the correct role or contact support.
+          </div>
         </div>
       {% endif %}
     </div>
@@ -124,20 +151,19 @@
     <span class="muted">©Gambling license from Curaçao </span>
   </footer>
 
-  {% if current_user.is_authenticated and current_user.role == 'PLAYER' %}
-    {% include "_dm_widget.html" %}
-  {% endif %}
-
+  <!-- Theme toggle -->
   <script>
     (function(){
-      const KEY='theme';
-      const root=document.documentElement;
-      const saved=localStorage.getItem(KEY);
-      if(saved==='light'){ root.dataset.theme='light'; }
-      const t=document.getElementById('themeToggleTop');
-      if(t){
-        t.checked = root.dataset.theme!=='light';
-        t.addEventListener('change', ()=>{
+      const KEY = 'theme';
+      const root = document.documentElement;
+      const saved = localStorage.getItem(KEY);
+      if (saved === 'light') {
+        root.dataset.theme = 'light';
+      }
+      const t = document.getElementById('themeToggleTop');
+      if (t) {
+        t.checked = root.dataset.theme !== 'light';
+        t.addEventListener('change', () => {
           root.dataset.theme = t.checked ? 'dark' : 'light';
           localStorage.setItem(KEY, root.dataset.theme);
         });
@@ -145,7 +171,59 @@
     })();
   </script>
 
-  <!-- cache-bust JS to avoid legacy /chat/messages callers -->
+  {# === Telegram WebApp auto-login (only runs inside Telegram mini app) === #}
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    (function () {
+      if (typeof Telegram === "undefined" || !Telegram.WebApp || !Telegram.WebApp.initDataUnsafe) {
+        return; // normal browser, do nothing
+      }
+
+      const unsafe = Telegram.WebApp.initDataUnsafe || {};
+      const user = unsafe.user;
+      if (!user) return;
+
+      // mark this session as Telegram for the server
+      document.cookie = "is_telegram=1; path=/";
+
+      // if we already did auto-login in this webview, skip
+      if (document.cookie.indexOf("tg_authed=1") !== -1) {
+        return;
+      }
+
+      fetch("/tg/autologin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: Telegram.WebApp.initData })
+      })
+      .then(r => r.json())
+      .then(function (data) {
+        if (data && data.ok) {
+          document.cookie = "tg_authed=1; path=/";
+          if (data.redirect) {
+            window.location.href = data.redirect;
+          } else {
+            window.location.reload();
+          }
+        } else {
+          console.log("tg_autologin failed", data);
+        }
+      })
+      .catch(function (err) {
+        console.log("tg_autologin error", err);
+      });
+    })();
+  </script>
+
+  {# ========= LIVE SUPPORT WIDGET (old working one) ========= #}
+  {% if current_user.is_authenticated
+        and (current_user.role or '') == 'PLAYER'
+        and not is_telegram %}
+    {# This partial contains the floating button + popup + JS that already works #}
+    {% include "_dm_widget.html" %}
+  {% endif %}
+
+  <!-- cache-bust JS -->
   <script src="{{ url_for('static', filename='js/main.js') }}?v=dm2"></script>
 </body>
 </html>

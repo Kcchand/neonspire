@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block hero %}
+  <div class="hero">
+    <div class="hero__title">
+      {{ message_title or "Something went wrong" }}
+    </div>
+    {% if status_code %}
+      <div class="hero__subtitle">
+        Error {{ status_code }}
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="shell" style="max-width: 640px;">
+    <div class="panel">
+      <p style="margin-bottom: 1rem;">
+        {{ message_body or "We hit an unexpected issue while loading this page." }}
+      </p>
+
+      <p class="muted" style="font-size: 0.875rem; margin-bottom: 1.5rem;">
+        If this problem continues, please contact our support team and mention the time of the error.
+      </p>
+
+      <div class="form-actions" style="display:flex;gap:10px;flex-wrap:wrap;">
+        <a class="btn btn-primary" href="{{ url_for('index') }}">Go to Home</a>
+        <button type="button" class="btn btn-ghost" onclick="window.location.reload();">
+          Try Again
+        </button>
+      </div>
+    </div>
+  </div>
+{% endblock %}

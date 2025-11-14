@@ -38,6 +38,9 @@ from models import (
 from models import notify
 from models import DepositRequest as Deposit  # back-compat alias
 
+# NOWPayments Crypto invoices
+from nowpayments_client import create_invoice as np_create_invoice, NowPaymentsError
+
 # =============================================================================
 # Optional dependencies (guard every import)
 # =============================================================================
@@ -231,6 +234,9 @@ except Exception:
 # Logging
 # -----------------------------------------------------------------------------
 log = logging.getLogger("player.request")
+
+# Optional minimum Crypto deposit in USD (NOWPAYMENTS_MIN_USD in .env)
+NOWPAY_MIN_USD = float(os.getenv("NOWPAYMENTS_MIN_USD", "0") or 0)
 
 # -----------------------------------------------------------------------------
 # Blueprints
@@ -623,30 +629,66 @@ def _render_deposit_step1(preselect_game_id: Optional[int]):
 def _render_deposit_step2(game_id: Optional[int], method: str, amount: int):
     if not _player_like():
         return abort(403)
+
     if not amount or amount <= 0:
         flash("Start over and enter a valid amount.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
+
     method = (method or "CRYPTO").upper()
     if method not in ("CRYPTO", "CHIME", "CASHAPP"):
         flash("Invalid payment method.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
+
     game = db.session.get(Game, game_id) if game_id else None
+
+    # 🔒 NEW: For CRYPTO / CHIME, a game is REQUIRED
+    if method in ("CRYPTO", "CHIME") and not game:
+        flash("Please select a game before depositing with Crypto or Chime.", "error")
+        return redirect(url_for("playerbp.deposit_step1"))
+
+    # 🔒 If a game is selected, user must already have a login for it
+    if game and not GameAccount.query.filter_by(user_id=current_user.id, game_id=game.id).first():
+        flash("You need a game login before depositing. Tap Request ID on the lobby first.", "error")
+        return redirect(url_for("playerbp.mylogin"))
+
     settings = _get_settings()
     return render_template(
         "player_deposit_step2.html",
-        amount=amount, method=method, game=game, settings=settings,
-        page_title="Deposit • Step 2"
+        amount=amount,
+        method=method,
+        game=game,
+        settings=settings,
+        page_title="Deposit • Step 2",
     )
 
 def _render_withdraw(game_id: Optional[int]):
     if not _player_like():
         return abort(403)
+
+    # 🔒 NEW: if a game is preselected, user must already have an account for it
+    if game_id:
+        if not GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first():
+            flash("You need a game login before withdrawing from this title. Tap Request ID on the lobby first.", "error")
+            return redirect(url_for("index"))
+
     settings = _get_settings()
     games = Game.query.filter_by(is_active=True).order_by(Game.name.asc()).all()
+
+    # Figure out which game is selected (if any) so the template can show its name
+    selected_game = None
+    if game_id:
+        for g in games:
+            if g.id == game_id:
+                selected_game = g
+                break
+
     return render_template(
         "player_withdraw.html",
-        settings=settings, games=games, preselect_game_id=game_id,
-        page_title="Withdraw • NeonSpire Casino"
+        settings=settings,
+        games=games,
+        preselect_game_id=game_id,
+        selected_game=selected_game,
+        page_title="Withdraw • NeonSpire Casino",
     )
 
 # =============================================================================
@@ -1220,10 +1262,12 @@ def deposit_step1():
 def deposit_step1_post():
     if not _player_like():
         return abort(403)
+
     try:
         amount = int(request.form.get("amount", "0"))
     except ValueError:
         amount = 0
+
     if amount <= 0:
         flash("Amount must be greater than zero.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
@@ -1235,14 +1279,31 @@ def deposit_step1_post():
 
     game_id_val = request.form.get("game_id")
     game_id = int(game_id_val) if game_id_val and str(game_id_val).isdigit() else None
+
+    # 🔒 For CRYPTO / CHIME, a game is REQUIRED
+    if method in ("CRYPTO", "CHIME") and not game_id:
+        flash("Please select a game before depositing with Crypto or Chime.", "error")
+        return redirect(url_for("playerbp.deposit_step1"))
+
     if game_id:
         g = db.session.get(Game, game_id)
         if not g or not g.is_active:
             flash("Selected game is not available.", "error")
             return redirect(url_for("playerbp.deposit_step1"))
 
-    return redirect(url_for("short_bp.deposit_step2_clean", game_id=game_id or 0, method=method, amount=amount))
+        # require that the player already has this game account
+        if not GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first():
+            flash("You need a game login before depositing. Tap Request ID on the lobby first.", "error")
+            return redirect(url_for("playerbp.mylogin"))
 
+    return redirect(
+        url_for(
+            "short_bp.deposit_step2_clean",
+            game_id=game_id or 0,
+            method=method,
+            amount=amount,
+        )
+    )
 @player_bp.get("/deposit/step2")
 @login_required
 def deposit_step2():
@@ -1262,11 +1323,12 @@ def deposit_submit():
         amount = int(request.form.get("amount", "0"))
     except ValueError:
         amount = 0
+
     method = (request.form.get("method") or "CRYPTO").upper()
     game_id_val = request.form.get("game_id")
     game_id = int(game_id_val) if game_id_val and str(game_id_val).isdigit() else None
 
-    # 🔹 NEW: extra info from Step 2 form
+    # extra info from Step 2 form
     payer_name = (request.form.get("payer_name") or "").strip()
     payer_details = (request.form.get("payer_details") or "").strip()
 
@@ -1276,12 +1338,14 @@ def deposit_submit():
     proof_url_text = (request.form.get("proof_url") or "").strip()
     screenshot_url = (request.form.get("screenshot_url") or "").strip()
     proof_url = uploaded_url or proof_url_text or screenshot_url
-        # Optional player-entered payment info
-    payer_name = (request.form.get("payer_name") or "").strip()
-    payer_details = (request.form.get("payer_details") or "").strip()
 
     if amount <= 0 or method not in ("CRYPTO", "CHIME", "CASHAPP"):
         flash("Invalid deposit details.", "error")
+        return redirect(url_for("playerbp.deposit_step1"))
+
+    # 🔒 For CRYPTO / CHIME, a game is REQUIRED
+    if method in ("CRYPTO", "CHIME") and not game_id:
+        flash("Please select a game before depositing with Crypto or Chime.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
 
     if game_id:
@@ -1290,8 +1354,13 @@ def deposit_submit():
             flash("Selected game is not available.", "error")
             return redirect(url_for("playerbp.deposit_step1"))
 
-    # 🔹 NEW: save payer_name / payer_details on the DepositRequest
-        dep = DepositRequest(
+        # require game login before actually creating the deposit
+        if not GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first():
+            flash("You need a game login before depositing. Tap Request ID on the lobby first.", "error")
+            return redirect(url_for("playerbp.mylogin"))
+
+    # create the deposit row first
+    dep = DepositRequest(
         user_id=current_user.id,
         game_id=game_id,
         amount=amount,
@@ -1308,7 +1377,63 @@ def deposit_submit():
     db.session.add(dep)
     db.session.commit()
 
-    # Staff notification details
+    # ==================== NOWPAYMENTS for CRYPTO ====================
+    if method == "CRYPTO":
+        try:
+            # Optional minimum in USD
+            if float(amount) < 11:
+                flash("Minimum Crypto deposit is $11.00.", "error")
+                return redirect(url_for("playerbp.deposit_step1"))
+
+            order_id = f"dep-{dep.id}"
+            desc = f"Crypto deposit #{dep.id} for user {current_user.id}"
+
+            np_data = np_create_invoice(
+                amount=float(amount),
+                order_id=order_id,
+                description=desc,
+            )
+
+            dep.provider = "nowpayments"
+            dep.provider_order_id = str(
+                np_data.get("id") or np_data.get("order_id") or order_id
+            )
+            dep.pay_url = np_data.get("invoice_url", "")
+            dep.backend_url = np_data.get("invoice_url", "")
+            dep.meta = {
+                "provider": "nowpayments",
+                "raw": np_data,
+                "payer_name": payer_name,
+                "payer_details": payer_details,
+                "proof_url": proof_url or "",
+            }
+            db.session.commit()
+
+            # Redirect straight to NowPayments checkout
+            if dep.pay_url:
+                return redirect(dep.pay_url)
+
+            # Fallback: no URL returned
+            flash(
+                "Crypto provider did not return a payment link. We will review your request manually.",
+                "warning",
+            )
+
+        except NowPaymentsError as e:
+            dep.status = "REJECTED"
+            dep.meta = {"provider": "nowpayments", "error": str(e)}
+            db.session.commit()
+            flash("Crypto payment provider error. Please try again later.", "error")
+            return redirect(url_for("playerbp.deposit_step1"))
+        except Exception as e:
+            dep.status = "REJECTED"
+            dep.meta = {"provider": "nowpayments", "error": str(e)}
+            db.session.commit()
+            flash("Could not start Crypto payment right now. Please try again.", "error")
+            return redirect(url_for("playerbp.deposit_step1"))
+    # ================= end NOWPAYMENTS block ========================
+
+    # Staff notification details (unchanged)
     game_name = ""
     acc_note = ""
     if game_id:
@@ -1321,7 +1446,7 @@ def deposit_submit():
 
     pname = _player_label(current_user)
 
-    # 🔹 NEW: build extra info string for staff (crypto/chime details + proof)
+    # build extra info string for staff (crypto/chime details + proof)
     extra_bits = []
     if proof_url:
         extra_bits.append(f"proof={proof_url}")
@@ -1330,7 +1455,10 @@ def deposit_submit():
     if payer_details:
         extra_bits.append(f"details={payer_details}")
 
-    extra = " | " + " | ".join(extra_bits) if extra_bits else ""
+    extra = " | ".join(extra_bits) if extra_bits else ""
+    if extra:
+        extra = " | " + extra
+
     target = f" for {game_name}" if game_name else ""
     suffix = f" | {acc_note}" if acc_note else ""
 
@@ -1342,7 +1470,7 @@ def deposit_submit():
     for staff in User.query.filter(User.role.in_(("EMPLOYEE", "ADMIN"))).all():
         notify(staff.id, staff_msg)
 
-    # Optional: Cash App invoice handoff
+    # Optional: Cash App invoice handoff (unchanged)
     if method == "CASHAPP" and create_cashapp_invoice:
         try:
             info = create_cashapp_invoice(float(amount), f"Deposit#{dep.id}", current_app.config)
@@ -1362,7 +1490,7 @@ def deposit_submit():
             return render_template(
                 "player_deposit_processing.html",
                 deposit=dep,
-                page_title="Processing…"
+                page_title="Processing…",
             )
 
         except Exception as e:
@@ -1372,16 +1500,19 @@ def deposit_submit():
             flash("Payment preparation failed. Please try again.", "error")
             return redirect(url_for("playerbp.deposit_step1"))
 
-    # For CHIME and CRYPTO: show the same processing page
-    if method in ("CHIME", "CRYPTO"):
+    # For CHIME we still show the processing page
+    if method == "CHIME":
         return render_template(
             "player_deposit_processing.html",
             deposit=dep,
-            page_title="Processing…"
+            page_title="Processing…",
         )
 
     # fallback (other manual methods)
-    notify(current_user.id, f"Deposit request #{dep.id} submitted. Your credits will appear shortly.")
+    notify(
+        current_user.id,
+        f"Deposit request #{dep.id} submitted. Your credits will appear shortly.",
+    )
     flash("Deposit submitted. We’ll notify you once it’s loaded.", "success")
     return redirect(url_for("index"))
 
@@ -1425,6 +1556,7 @@ def withdraw_post():
     keep_amount  = request.form.get("keep_amount", type=int) or 0
     tip_amount   = request.form.get("tip_amount", type=int) or 0
     amount       = request.form.get("amount", type=int) or 0
+
     if amount <= 0 or total_amount <= 0:
         # front-end JS expects JSON
         return jsonify({"ok": False, "error": "Please enter a valid total and cash-out amount."}), 400
@@ -1434,6 +1566,13 @@ def withdraw_post():
         g = db.session.get(Game, game_id)
         if not g or not g.is_active:
             return jsonify({"ok": False, "error": "Selected game is not available."}), 400
+
+        # 🔒 NEW: must already have a GameAccount for this game
+        if not GameAccount.query.filter_by(user_id=current_user.id, game_id=game_id).first():
+            return jsonify({
+                "ok": False,
+                "error": "You need a game login for that title before requesting a withdrawal."
+            }), 400
 
     s = _get_settings()
     if s and s.min_redeem and amount < s.min_redeem:
@@ -1484,11 +1623,11 @@ def withdraw_post():
         f"via {method}",
     ]
     if game_name:
-      parts.append(f"game={game_name}")
+        parts.append(f"game={game_name}")
     if address:
-      parts.append(f"dest: {address}")
+        parts.append(f"dest: {address}")
     if acc_note:
-      parts.append(acc_note)
+        parts.append(acc_note)
     staff_msg = " | ".join(parts)
 
     for staff in User.query.filter(User.role.in_(("EMPLOYEE", "ADMIN"))).all():
@@ -1496,8 +1635,21 @@ def withdraw_post():
 
     # player in-site notification
     notify(current_user.id, f"Withdrawal request #{wr.id} submitted. You’ll be notified once processed.")
+        # ✅ Telegram staff alert for new withdrawal
+    try:
+        from telegram_bot import notify_withdraw_request
+        game_name_val = game_name or "—"
+        notify_withdraw_request(
+            user=current_user,
+            amount=amount,
+            method=method,
+            address=address,
+            game_name=game_name_val
+        )
+    except Exception as e:
+        print("[telegram_notify_withdraw] failed:", e)
 
-    # 👇 KEY CHANGE: return JSON so the template can start polling
+    # return JSON so the template can show messages
     return jsonify({
         "ok": True,
         "id": wr.id,
@@ -1560,23 +1712,18 @@ def accounts_page():
             "note": _first_attr(acc, "extra", "note", "notes", "remark", default=""),
         })
 
-    raw_reqs = (
-        db.session.query(GameAccountRequest, Game.name.label("game_name"))
-        .join(Game, Game.id == GameAccountRequest.game_id)
-        .filter(GameAccountRequest.user_id == current_user.id)
-        .order_by(GameAccountRequest.created_at.desc())
-        .all()
-    )
-    reqs = [{"game": gname, "status": req.status or "PENDING", "created_at": req.created_at}
-            for req, gname in raw_reqs]
+    # ❌ REMOVE the access-requests logic (raw_reqs / reqs)
+    # raw_reqs = ...
+    # reqs = ...
 
     juwa_has_login = any(gname.lower().strip() == "juwa" for gname in [a["game"] for a in accounts])
+
     return render_template(
         "player_accounts.html",
         accounts=accounts,
-        requests=reqs,
         page_title="My Logins • NeonSpire Casino",
         juwa_has_login=juwa_has_login
+        # ❌ do NOT pass `requests=reqs` anymore
     )
 
 @player_bp.get("/logins")
@@ -1588,12 +1735,15 @@ def legacy_logins_redirect():
 # Keep your old alias too
 player_bp.add_url_rule("/deposit", endpoint="deposit_get", view_func=deposit_step1)
 
-# NEW: alias so templates can call playerbp.withdraw_get
-player_bp.add_url_rule(
-    "/withdraw",
-    endpoint="withdraw_get",
-    view_func=lambda: _render_withdraw(game_id=None)
-)
+# Proper withdraw GET handler (supports ?game_id=...)
+@player_bp.get("/withdraw", endpoint="withdraw_get")
+@login_required
+def withdraw_get():
+    # If called as /player/withdraw?game_id=7 we lock to that game.
+    # If no game_id param, user must choose a game on the form.
+    game_id = request.args.get("game_id", type=int)
+    return _render_withdraw(game_id=game_id)
+
 
 # =============================================================================
 #                               REFERRALS
@@ -1683,6 +1833,22 @@ def referral_landing(code: str):
         rc.uses = (rc.uses or 0) + 1; db.session.commit()
     return redirect(url_for("auth.register_get") + f"?ref={code}")
 
+
+# NOWPayments redirect targets (from .env)
+@short_bp.get("/deposit/crypto/success")
+@login_required
+def deposit_crypto_success():
+    # At this point NOWPayments has redirected the user after pay.
+    # The actual confirmation should come via IPN; this is just UX.
+    flash("Crypto payment received or pending blockchain confirmation. We'll load your credits shortly.", "success")
+    return redirect(url_for("playerbp.player_dashboard"))
+
+@short_bp.get("/deposit/crypto/cancel")
+@login_required
+def deposit_crypto_cancel():
+    flash("Crypto payment was cancelled or not completed.", "error")
+    return redirect(url_for("playerbp.deposit_step1"))
+
 # =====================================================================
 #                       SHORT / CLEAN ROUTES
 # =====================================================================
@@ -1730,16 +1896,32 @@ def dep_with_game(game_id: int):
 def dep_method_short(method: str):
     amount = request.args.get("amount", type=int)
     game_id = request.args.get("game_id", type=int)
+
     if not amount or amount <= 0:
         flash("Enter a valid amount.", "error")
         return redirect(url_for("playerbp.deposit_step1"))
+
+    method_up = (method or "").upper()
+
+    # 🔒 For CRYPTO / CHIME, a game is REQUIRED
+    if method_up in ("CRYPTO", "CHIME") and not game_id:
+        flash("Please select a game before depositing with Crypto or Chime.", "error")
+        return redirect(url_for("playerbp.deposit_step1"))
+
     if game_id:
         g = db.session.get(Game, game_id)
         if not g or not g.is_active:
             flash("Selected game is not available.", "error")
             return redirect(url_for("playerbp.deposit_step1"))
-    return redirect(url_for("short_bp.deposit_step2_clean", game_id=game_id or 0, method=method.upper(), amount=amount))
 
+    return redirect(
+        url_for(
+            "short_bp.deposit_step2_clean",
+            game_id=game_id or 0,
+            method=method_up,
+            amount=amount,
+        )
+    )
 @short_bp.get("/withd")
 @login_required
 def withd_short():

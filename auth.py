@@ -153,11 +153,13 @@ def login_post():
         flash_once("Invalid email or password.", "error")
         return redirect(url_for("auth.login_get"))
 
-    # Enforce verified email before allowing login
-    if not user.email_verified:
+        # Enforce verified email only for PLAYER accounts.
+    role = (user.role or "").upper()
+    if role == "PLAYER" and not user.email_verified:
         _send_verification_email(user)  # silently re-send
         flash_once("Please verify your email before signing in. We’ve sent a new link to your inbox.", "error")
         return redirect(url_for("auth.login_get"))
+    
 
     login_user(user, remember=remember)
 
