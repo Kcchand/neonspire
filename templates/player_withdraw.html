@@ -21,6 +21,14 @@
       {% endif %}
     </div>
 
+    <!-- error banner (front-end validation) -->
+    <div id="wdError"
+         class="flash flash-error"
+         style="display:none;margin-bottom:10px;">
+    </div>
+
+    <!-- success banner (shown when status === PAID) -->
+
     <!-- success banner (shown when status === PAID) -->
     <div id="wdSuccess" style="display:none;margin-bottom:10px">
       <div style="background:rgba(18,217,161,.12);border:1px solid rgba(18,217,161,.35);color:#12d9a1;
@@ -49,7 +57,11 @@
       <div style="font-size:12px;color:#c5ccdd">Do not refresh this page.</div>
     </div>
 
-    <form id="withdrawForm" class="form-grid" method="post" action="{{ url_for('playerbp.withdraw_post') }}">
+    <form id="withdrawForm"
+    class="form-grid"
+    method="post"
+    action="{{ url_for('playerbp.withdraw_post') }}"
+    data-min-withdraw="{{ settings.min_redeem or 0 }}">
       <div class="form-group">
         <label for="wdGame">Game (optional)</label>
         <select id="wdGame" name="game_id"
@@ -269,6 +281,23 @@
   const pendBox = document.getElementById('wdPending');
   const okBox   = document.getElementById('wdSuccess');
   const loaderText = document.getElementById('loaderText');
+  const errBox  = document.getElementById('wdError');
+
+  function showError(msg) {
+    if (errBox) {
+      errBox.textContent = msg;
+      errBox.style.display = 'block';
+    } else {
+      alert(msg);
+    }
+  }
+
+  function clearError() {
+    if (errBox) {
+      errBox.textContent = '';
+      errBox.style.display = 'none';
+    }
+  }
 
   // 🔁 poller
   async function pollStatus(id) {
@@ -293,6 +322,16 @@
   if (form) {
     form.addEventListener('submit', async function (ev) {
       ev.preventDefault(); // we'll ajax it
+      clearError();
+
+      // 🔒 NEW: front-end min cash-out validation
+      const minWithdraw = parseInt(form.dataset.minWithdraw || '0', 10);
+      const cashOutVal  = parseInt(cashOut.value || '0', 10);
+
+      if (minWithdraw > 0 && cashOutVal < minWithdraw) {
+        showError(`Sorry, you can’t cash out yet. Minimum cash-out is ${minWithdraw}.`);
+        return; // ❌ do not send request to backend
+      }
 
       if (overlay) overlay.style.display = 'flex';
       if (loaderText) loaderText.textContent = 'Submitting your withdrawal…';

@@ -50,8 +50,16 @@ def build_new_username():
 # ------------------------------------------------------------------------------
 
 async def do_login(page):
+    # Go to admin – this already waits for DOM to be ready
     await page.goto(f"{YOLO_BASE_URL}/admin", wait_until="domcontentloaded", timeout=TIMEOUT)
-    html = await page.content()
+
+    # Safe first content check
+    try:
+        html = await page.content()
+    except Exception as e:
+        print("[yolo_bot] warning: could not read initial login page content:", e)
+        html = ""
+
     if "login-box-msg" not in html and "login to your account" not in html.lower():
         # already logged in
         return
@@ -91,11 +99,21 @@ async def do_login(page):
         raise RuntimeError("login: submit button not found")
     await btn.click()
 
-    # ajax login → short sleep
-    await asyncio.sleep(2.0)
+    # 🔹 Instead of a blind sleep + fragile page.content(),
+    #    wait for network to calm down and guard page.content().
+    try:
+        await wait_network_idle(page)
+    except Exception:
+        # ignore; just best-effort
+        pass
+
+    try:
+        html2 = await page.content()
+    except Exception as e:
+        print("[yolo_bot] warning: could not read post-login content (safe to ignore):", e)
+        html2 = ""
 
     # 2FA?
-    html2 = await page.content()
     if "name=\"gcode\"" in html2 or "placeholder=\"Code\"" in html2:
         if not YOLO_GCODE:
             raise RuntimeError("login: panel requires 2FA code but YOLO_GCODE is empty")

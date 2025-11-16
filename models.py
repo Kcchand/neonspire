@@ -231,6 +231,7 @@ class GameAccountRequest(db.Model):
 
     # PENDING | IN_PROGRESS | PROVIDED | APPROVED | REJECTED
     status = db.Column(db.String(20), default="PENDING", index=True)
+    retry_count = db.Column(db.Integer, default=0, nullable=False)
 
     note = db.Column(db.String(300), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

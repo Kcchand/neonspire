@@ -22,6 +22,7 @@ from flask import (
 from flask_login import login_required, current_user
 from sqlalchemy import text
 
+
 from models import (
     db,
     User,
@@ -237,6 +238,8 @@ log = logging.getLogger("player.request")
 
 # Optional minimum Crypto deposit in USD (NOWPAYMENTS_MIN_USD in .env)
 NOWPAY_MIN_USD = float(os.getenv("NOWPAYMENTS_MIN_USD", "0") or 0)
+
+USE_ID_QUEUE = True
 
 # -----------------------------------------------------------------------------
 # Blueprints
@@ -698,7 +701,13 @@ def _render_withdraw(game_id: Optional[int]):
 @player_bp.post("/<string:game_slug>/request-id", endpoint="generic_request_id")
 @login_required
 def generic_request_id(game_slug: str):
-    """Instant account creation for any registered provider."""
+    """
+    Request ID for a provider by slug.
+
+    - In queue mode (USE_ID_QUEUE=True): just create a PENDING GameAccountRequest
+      and let id_request_worker.py handle all automation.
+    - In instant mode (USE_ID_QUEUE=False): keep old behavior (direct provider.create()).
+    """
     provider = _provider_for_slug(game_slug)
     if not provider:
         flash("Game automation not configured.", "error")
@@ -711,14 +720,41 @@ def generic_request_id(game_slug: str):
         flash(f"You already have a {game.name} login. Check My Logins.", "error")
         return redirect(url_for("playerbp.mylogin"))
 
-    # Track request row
+    # Create the request row
     req = GameAccountRequest(
-        user_id=current_user.id, game_id=game.id,
-        status="PENDING", created_at=datetime.utcnow()
+        user_id=current_user.id,
+        game_id=game.id,
+        status="PENDING",
+        created_at=datetime.utcnow(),
     )
-    db.session.add(req); db.session.flush()
+    db.session.add(req)
+    db.session.flush()
 
-    # Try auto-provision
+    
+    # 🟢 QUEUE MODE → enqueue Celery task and send back to lobby (index)
+    if USE_ID_QUEUE:
+        db.session.commit()
+
+        try:
+            # Lazy import to avoid circular import at app startup
+            
+            from id_requests import process_id_request
+            process_id_request.delay(req.id)
+        except Exception as e:
+            # fallback: mark as failed if Celery not reachable
+            req.status = "FAILED"
+            if hasattr(req, "last_error"):
+                req.last_error = f"Celery enqueue failed: {e}"
+            if hasattr(req, "updated_at"):
+                req.updated_at = datetime.utcnow()
+            db.session.commit()
+            flash("Automatic ID queue is temporarily unavailable.", "error")
+            return redirect(url_for("playerbp.mylogin"))
+
+        # no flash, no notify – let index.html show loading
+        return redirect(url_for("index", req_id=req.id, game_id=game.id))
+
+    # 🔻 OLD INSTANT MODE BELOW (unchanged, only runs if USE_ID_QUEUE=False)
     auto_err = ""
     try:
         res = provider.create() or {}
@@ -737,9 +773,7 @@ def generic_request_id(game_slug: str):
         auto_err = str(e)
         log.exception("%s instant create failed", provider.name)
 
- 
-        # Fallback: DO NOT queue for manual – fail hard
-    # remove the pending request so it doesn't sit in staff panel
+    # Fallback: DO NOT keep failed request as pending in instant mode
     try:
         db.session.delete(req)
         db.session.commit()
@@ -912,6 +946,14 @@ def player_dashboard():
     if not _player_like():
         return abort(403)
 
+    # 🔹 NEW: check if a queued request was passed in URL (from queued_requests.py)
+    pending_req_id = request.args.get("req_id", type=int)
+    pending_req_game_id = None
+    if pending_req_id:
+        req = db.session.get(GameAccountRequest, pending_req_id)
+        if req and req.user_id == current_user.id:
+            pending_req_game_id = req.game_id
+
     settings = _get_settings()
     wallet = _ensure_wallet(current_user.id)
     games = Game.query.filter_by(is_active=True).order_by(Game.name.asc()).all()
@@ -961,6 +1003,9 @@ def player_dashboard():
         promo_line1=promo_line1,
         promo_line2=promo_line2,
         bonus_percent=bonus_percent,
+         # 🔹 NEW: info for loading state
+        pending_req_id=pending_req_id,
+        pending_req_game_id=pending_req_game_id,
     )
 
 # =============================================================================
@@ -1131,7 +1176,13 @@ def api_ultrapanda_request():
 @player_bp.post("/game/<int:game_id>/request-account", endpoint="request_game_account")
 @login_required
 def request_game_account(game_id: int):
-    """Legacy path by numeric game_id; still attempts instant automation when possible."""
+    """
+    Request a game account by numeric game_id.
+
+    - If USE_ID_QUEUE=True: only enqueue a PENDING request; background worker will
+      handle automation for Juwa / Milkyway / UltraPanda / Vblink / YOLO / Gameroom / etc.
+    - If USE_ID_QUEUE=False: keep the old instant auto-provision logic.
+    """
     if not _player_like():
         return abort(403)
 
@@ -1145,10 +1196,38 @@ def request_game_account(game_id: int):
         notify(current_user.id, "⚠️ You already have this game account. Check My Logins.")
         return redirect(url_for("playerbp.mylogin", noinfo=1))
 
-    req = GameAccountRequest(user_id=current_user.id, game_id=game_id, status="PENDING")
-    db.session.add(req)
-    db.session.flush()
+         # 🟢 QUEUE MODE → enqueue Celery task and send back to lobby (index)
+    if USE_ID_QUEUE:
+        # create the queue row (same idea as generic_request_id)
+        req = GameAccountRequest(
+            user_id=current_user.id,
+            game_id=game.id,
+            status="PENDING",
+            created_at=datetime.utcnow(),
+        )
+        db.session.add(req)
+        db.session.flush()  # get req.id
 
+        db.session.commit()
+
+        try:
+            # Lazy import here too (no circular import)
+            from id_requests import process_id_request
+            process_id_request.delay(req.id)
+        except Exception as e:
+            req.status = "FAILED"
+            if hasattr(req, "last_error"):
+                req.last_error = f"Celery enqueue failed: {e}"
+            if hasattr(req, "updated_at"):
+                req.updated_at = datetime.utcnow()
+            db.session.commit()
+            flash("Automatic ID queue is temporarily unavailable.", "error")
+            return redirect(url_for("playerbp.mylogin"))
+
+        # no flash, no notify – index.html will show per-card loader + polling
+        return redirect(url_for("index", req_id=req.id, game_id=game_id))
+
+    # 🔻 OLD INSTANT MODE BELOW (only used if USE_ID_QUEUE=False)
     gname = (game.name or "").strip().lower()
     is_gv   = ("gamevault" in gname.replace(" ", ""))
     is_juwa = ("juwa" in gname)
@@ -1245,6 +1324,86 @@ def request_game_account(game_id: int):
     notify(current_user.id, f"⚠️ {friendly_msg}")
 
     return redirect(url_for("playerbp.mylogin", noinfo=1))
+
+    auto_err = ""
+    try:
+        if is_gv and gv_create_account:
+            res = gv_create_account(current_user.name or "", current_user.email or "")
+            if res and res.get("ok"):
+                return _finish(res, "Auto-provisioned via GameVault (instant)")
+            auto_err = (res or {}).get("error", "GV auto-provision failed")
+
+        elif is_juwa and juwa_create_sync:
+            try:
+                res = juwa_create_sync()
+            except TypeError:
+                res = juwa_create_sync(None, None)
+            if res and res.get("ok"):
+                return _finish(res, "Auto-provisioned via Juwa (instant)")
+            auto_err = (res or {}).get("error", "Juwa auto-provision failed")
+
+        elif is_mw and mw_create_player_auto:
+            res = mw_create_player_auto() or {}
+            if (res.get("created") and res.get("account")) or res.get("ok"):
+                return _finish(
+                    {"account": res.get("account"), "password": res.get("password") or res.get("account")},
+                    "Auto-provisioned via Milkyway (instant)",
+                )
+            auto_err = (res or {}).get("error", "Milkyway auto-provision failed")
+
+        elif is_vb and _vb_create_sync:
+            res = _vb_create_sync() or {}
+            if res.get("ok"):
+                return _finish(res, "Auto-provisioned via Vblink (instant)")
+            auto_err = (res or {}).get("error", "Vblink auto-provision failed")
+
+        elif is_yolo and yolo_create_sync:
+            res = yolo_create_sync() or {}
+            if res.get("ok") or res.get("account"):
+                return _finish(res, "Auto-provisioned via YOLO (instant)")
+            auto_err = (res or {}).get("error", "YOLO auto-provision failed")
+
+        elif is_gr and gameroom_create_sync:
+            res = gameroom_create_sync() or {}
+            if res.get("ok") or res.get("account"):
+                return _finish(res, "Auto-provisioned via Gameroom (instant)")
+            auto_err = (res or {}).get("error", "Gameroom auto-provision failed")
+
+        elif is_up and _up_create_sync:
+            res = _up_create_sync() or {}
+            if res.get("ok") or res.get("account"):
+                return _finish(res, "Auto-provisioned via UltraPanda (instant)")
+            auto_err = (res or {}).get("error", "UltraPanda auto-provision failed")
+
+    except Exception as e:
+        auto_err = str(e)
+        log.exception("REQ-ID autoprov exception")
+
+    # DO NOT queue for staff – remove pending request so it doesn't show as manual
+    try:
+        db.session.delete(req)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    # -------- Friendly error message for the player --------
+    err_text = (auto_err or "").lower()
+    if "captcha_api_key" in err_text or "captcha" in err_text:
+        friendly_msg = f"Automatic ID creation for {game.name} is temporarily unavailable due to a verification issue. Please try again later."
+    elif "login" in err_text:
+        friendly_msg = f"We couldn't reach the {game.name} server. Please try again in a few minutes."
+    elif "network" in err_text or "timeout" in err_text:
+        friendly_msg = "Network issue while talking to the game server. Please try again in a few minutes."
+    else:
+        friendly_msg = f"We couldn't automatically create your {game.name} ID. Please try again shortly."
+
+    flash(friendly_msg, "error")
+    notify(current_user.id, f"⚠️ {friendly_msg}")
+
+    return redirect(url_for("playerbp.mylogin", noinfo=1))
+
+
+
 # =============================================================================
 #                          DEPOSIT (2 steps)
 # =============================================================================
@@ -1515,6 +1674,19 @@ def deposit_submit():
     )
     flash("Deposit submitted. We’ll notify you once it’s loaded.", "success")
     return redirect(url_for("index"))
+
+
+# =============================================================================
+#                      GAME ID REQUEST STATUS (for polling)
+# =============================================================================
+
+@player_bp.get("/request/<int:req_id>/status.json", endpoint="request_status_json")
+@login_required
+def request_status_json(req_id: int):
+    req = db.session.get(GameAccountRequest, req_id)
+    if not req or req.user_id != current_user.id:
+        return jsonify({"ok": False}), 404
+    return jsonify({"ok": True, "status": req.status or ""})
 
 # =============================================================================
 #                         CASH APP status helpers

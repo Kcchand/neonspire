@@ -9,13 +9,16 @@ print("✅ Loaded .env from:", dotenv_path)
 print("✅ TELEGRAM_BOT_TOKEN (first 15):", os.getenv("TELEGRAM_BOT_TOKEN")[:15])
 from flask_login import LoginManager, current_user
 from sqlalchemy import text, inspect as sqla_inspect
+from sqlalchemy.exc import TimeoutError as SATimeoutError, SQLAlchemyError
 from flask_socketio import SocketIO, emit
 from flask_mail import Mail
 from gv_keepalive import start_keepalive_background
 start_keepalive_background()
 from telegram_bp import telegram_bp
 import secrets
-from flask_login import login_user
+from flask_login import login_user,login_required, current_user
+from queued_requests import queue_bp
+from celery_app import init_celery, celery
 
 # models (import every model that needs a table so create_all() sees them)
 from models import (
@@ -73,6 +76,15 @@ def create_app():
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-key")
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///casino.db")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # 🔧 Bigger SQLAlchemy pool for Neon (helps avoid TimeoutError under load)
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_size": 20,        # persistent connections
+        "max_overflow": 40,     # extra temporary connections
+        "pool_timeout": 30,     # seconds to wait for a connection
+        "pool_recycle": 1800,   # recycle connections every 30 minutes
+        "pool_pre_ping": True,  # check connection before using it
+    }
 
     # SafePay config
     app.config["SAFE_PAY_LOGIN_URL"]   = os.getenv("SAFE_PAY_LOGIN_URL", "https://www.safepayin.com/#/base/exp")
@@ -163,6 +175,33 @@ def create_app():
     PROMO2_ALIASES = ("promo_line2", "news_line2", "ticker_line2", "headline2", "news2")
     TREND_ALIASES  = ("trending_game_ids", "trending_ids", "trending_csv", "trending")
 
+
+
+    @app.get("/player/request/latest/<int:game_id>.json")
+    @login_required
+    def player_request_latest_for_game_json(game_id):
+        """
+        Return the most recent GameAccountRequest for this user + game.
+        JS only needs the request_id; it will poll status via
+        /player/request/<req_id>/status.json (queued_requests.py).
+        """
+        req = (
+            GameAccountRequest.query
+            .filter(
+                GameAccountRequest.user_id == current_user.id,
+                GameAccountRequest.game_id == game_id,
+            )
+            .order_by(GameAccountRequest.id.desc())
+            .first()
+        )
+        if not req:
+            return jsonify({"ok": False, "error": "Request not found"}), 404
+
+        return jsonify({
+            "ok": True,
+            "request_id": req.id,
+        })
+
     # ------------------ login manager ------------------
     login_manager = LoginManager()
     login_manager.login_view = "auth.login_get"
@@ -198,11 +237,16 @@ def create_app():
             or request.path.startswith("/tg/")
         )
 
+        system_status = {
+            "busy": os.getenv("SYSTEM_BUSY", "0") == "1"
+        }
+
         return dict(
             unread_count=cnt,
             settings=settings,
             wallet=wallet,
             is_telegram=is_telegram,
+            system_status=system_status,
         )
 
     # ------------------ blueprints ------------------
@@ -214,6 +258,7 @@ def create_app():
     app.register_blueprint(player_bp)
     app.register_blueprint(short_bp)
     app.register_blueprint(telegram_bp)
+    app.register_blueprint(queue_bp)
     if chat_bp:
         app.register_blueprint(chat_bp)
         
@@ -366,12 +411,12 @@ def create_app():
     def health():
         return {"ok": True, "service": "web", "env": os.getenv("NODE_ENV", "production")}
 
-    # ------------------ Socket.IO sample ------------------
+        # ------------------ Socket.IO sample ------------------
     @socketio.on("connect")
     def _on_connect():
         emit("welcome", {"msg": f"Connected (async={ASYNC_MODE})"})
 
-        # ------------------ Global error handlers ------------------
+    # ------------------ Global error handlers ------------------
     @app.errorhandler(404)
     def handle_404(err):
         # Page not found
@@ -385,10 +430,54 @@ def create_app():
             404,
         )
 
+    # 🔹 database timeout – e.g. Neon is busy or too many connections
+    @app.errorhandler(SATimeoutError)
+    def handle_db_timeout(err):
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+        # auto-enable busy mode for 30 seconds
+        os.environ["SYSTEM_BUSY"] = "1"
+
+        return (
+            render_template(
+                "error.html",
+                status_code=503,
+                message_title="Casino is busy",
+                message_body=(
+                    "Our servers are handling a lot of players right now. "
+                    "Your request took too long to complete. Please refresh the page or try again shortly."
+                ),
+            ),
+            503,
+        )
+
+    # 🔹 any other SQLAlchemy / database error
+    @app.errorhandler(SQLAlchemyError)
+    def handle_db_error(err):
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+        return (
+            render_template(
+                "error.html",
+                status_code=500,
+                message_title="Database error",
+                message_body=(
+                    "We ran into a temporary issue talking to the casino database. "
+                    "Nothing was charged or changed. Please try again in a moment."
+                ),
+            ),
+            500,
+        )
+
     @app.errorhandler(500)
     def handle_500(err):
         # Unexpected server error
-        # Log the real error to the console for debugging
         try:
             app.logger.exception("Unhandled 500 error: %s", err)
         except Exception:
@@ -504,6 +593,12 @@ def create_app():
             _add_col("ALTER TABLE game_account_requests ADD COLUMN handled_by INTEGER")
         if not _has_col("game_account_requests", "approved_at"):
             _add_col("ALTER TABLE game_account_requests ADD COLUMN approved_at DATETIME")
+
+        if not _has_col("game_account_requests", "status"):
+            _add_col("ALTER TABLE game_account_requests ADD COLUMN status VARCHAR(20) DEFAULT 'PENDING'")
+
+        if not _has_col("game_account_requests", "retry_count"):
+            _add_col("ALTER TABLE game_account_requests ADD COLUMN retry_count INTEGER DEFAULT 0")
 
         # --- deposit_requests patches ---
         if not _has_col("deposit_requests", "loaded_by"):

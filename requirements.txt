@@ -21,3 +21,6 @@ playwright
 redis
 rq
 python-telegram-bot==13.15
+psycopg2-binary
+celery
+
