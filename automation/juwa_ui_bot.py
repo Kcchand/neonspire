@@ -111,6 +111,39 @@ async def _solve_captcha(page: Page) -> str:
                 raise RuntimeError("2captcha timeout")
 
 
+# --- VegasZ / announcement popup dismiss ---
+async def _dismiss_vegas_popup(page: Page) -> None:
+    """
+    Close the VegasZ / Juwa 2.0 rollout popup if present.
+    We look for a dialog containing 'VegasZ Games & Juwa 2.0 Rollout'
+    and click its OK button.
+    """
+    try:
+        # small grace time – but don't block if nothing appears
+        await asyncio.sleep(1.0)
+        dialog = page.locator(
+            "[role='dialog']:has-text('Juwa 2.0 Rollout'), "
+            "[role='dialog']:has-text('VegasZ Games & Juwa 2.0 Rollout'), "
+            ".el-dialog:has-text('Juwa 2.0 Rollout'), "
+            ".el-dialog:has-text('VegasZ Games & Juwa 2.0 Rollout')"
+        ).first
+        if await dialog.count() == 0:
+            return
+
+        ok_btn = dialog.get_by_role("button", name="OK")
+        if await ok_btn.count() == 0:
+            ok_btn = dialog.locator("button:has-text('OK')")
+        if await ok_btn.count():
+            await ok_btn.first.click()
+            try:
+                await dialog.wait_for(state="detached", timeout=5000)
+            except Exception:
+                pass
+    except Exception:
+        # Never let this kill the workflow
+        pass
+
+
 # --- Login ---
 async def juwa_login(page: Page) -> dict:
     await page.goto(LOGIN_URL, wait_until="domcontentloaded")
@@ -145,13 +178,24 @@ async def juwa_login(page: Page) -> dict:
     await btn.first.click()
 
     await page.wait_for_url("**/HomeDetail", timeout=30_000)
+
+    # NEW: close VegasZ / Juwa 2.0 popup if it shows up after login
+    await _dismiss_vegas_popup(page)
+
     return {"ok": True, "stage": "login", "url": page.url}
 
 
 # --- Navigation: User Management ---
 async def goto_user_management(page: Page):
+    # Make sure any announcement popup is closed before navigating
+    await _dismiss_vegas_popup(page)
+
     if "/userManagement" not in page.url:
         await page.goto(UM_URL, wait_until="domcontentloaded")
+
+    # Some deployments show the popup AFTER navigation as well
+    await _dismiss_vegas_popup(page)
+
     try:
         await page.wait_for_selector(
             "button:has-text('+ create'), button:has-text('create')",
@@ -473,3 +517,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
