@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="hero">
+  <div class="hero__title">Players</div>
+  <div class="hero__subtitle">Search players and permanently delete accounts</div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell">
+
+  <div class="panel">
+    <div class="between">
+      <div class="h3">All Players</div>
+      <form method="get" class="row" style="gap:8px">
+        <input class="input" name="q" placeholder="Search by name / email / mobile" value="{{ request.args.get('q','') }}">
+        <button class="btn btn-ghost" type="submit">Search</button>
+      </form>
+    </div>
+
+    <div class="table mt8">
+      <div class="tr th">
+        <div>ID</div>
+        <div>Name</div>
+        <div>Email</div>
+        <div>Mobile</div>
+        <div>Joined</div>
+        <div>Action</div>
+      </div>
+
+      {% for p in players %}
+        <div class="tr">
+          <div class="mono">#{{ p.id }}</div>
+          <div>{{ p.name or '—' }}</div>
+          <div>{{ p.email }}</div>
+          <div>{{ p.mobile or '—' }}</div>
+          <div class="mono">
+            {% if p.created_at %}{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
+          </div>
+          <div>
+            <form method="post"
+                  action="{{ url_for('adminbp.delete_player', player_id=p.id) }}"
+                  onsubmit="return confirm('Delete player {{ p.email }} and ALL related data? This cannot be undone.');">
+              <button class="btn" style="background:rgba(255,0,0,.15);border-color:rgba(255,0,0,.35)">Delete</button>
+            </form>
+          </div>
+        </div>
+      {% else %}
+        <div class="muted">No players found.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

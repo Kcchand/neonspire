@@ -1,0 +1,209 @@
+{# templates/_dm_widget.html #}
+<div id="dmDock"
+     style="position:fixed;right:16px;bottom:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:flex-end"
+     {% if thread %}data-thread-id="{{ thread.id }}"{% endif %}>
+  <button id="dmToggle" class="btn btn-primary"
+          style="border-radius:999px;padding:.5rem .8rem;box-shadow:0 6px 18px rgba(0,0,0,.25)">
+    💬 Support
+  </button>
+
+  <div id="dmPanel"
+       style="display:none;width:340px;max-height:64vh;border:1px solid var(--stroke,#2a2e37);border-radius:12px;background:var(--panel,#0f1115);overflow:hidden">
+    <div style="padding:10px;border-bottom:1px solid var(--stroke,#2a2e37);display:flex;align-items:center;justify-content:space-between">
+      <strong>Private Support</strong>
+      <button id="dmClose" class="btn btn-mini btn-ghost">✕</button>
+    </div>
+
+    <div id="dmViewport" style="padding:10px;overflow:auto;height:44vh;background:rgba(255,255,255,.02)">
+      <div id="dmList" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div id="dmEmpty" class="muted" style="font-size:12px;display:none">No messages yet.</div>
+    </div>
+
+    <div style="padding:10px;border-top:1px solid var(--stroke,#2a2e37)">
+      {% if current_user.is_authenticated and current_user.role == 'PLAYER' %}
+        <form id="dmForm" style="display:flex;gap:8px">
+          <input id="dmInput" type="text" maxlength="1000" placeholder="Type a message…"
+                 style="flex:1;border:1px solid var(--stroke);border-radius:10px;padding:8px;background:var(--panel);color:var(--text)">
+          <button class="btn btn-primary" type="submit">Send</button>
+        </form>
+        <div class="muted" style="margin-top:6px;font-size:12px">Press Enter to send</div>
+      {% else %}
+        <div class="muted" style="font-size:12px;padding:2px 0 6px 0">Please sign in as a player to chat.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // keep booleans exactly as before (no quotes)
+  const authed   = {{ "true" if current_user.is_authenticated else "false" }};
+  const isPlayer = {{ "true" if (current_user.is_authenticated and current_user.role == 'PLAYER') else "false" }};
+
+  // Safely pass the player's name into JS (escaped with tojson to avoid breaking the script)
+  {% if current_user.is_authenticated and current_user.role == 'PLAYER' %}
+    const playerLabel = {{ (current_user.name or "Player") | tojson }};
+  {% else %}
+    const playerLabel = "Player";
+  {% endif %}
+
+  const dock = document.getElementById('dmDock');
+  let threadId = dock ? (dock.dataset.threadId || "") : "";
+  const toggle = document.getElementById('dmToggle');
+  const panel  = document.getElementById('dmPanel');
+  const closeB = document.getElementById('dmClose');
+  const list   = document.getElementById('dmList');
+  const empty  = document.getElementById('dmEmpty');
+  const form   = document.getElementById('dmForm');
+  const input  = document.getElementById('dmInput');
+  const view   = document.getElementById('dmViewport');
+
+  let lastId = 0, timer = null;
+
+  function fmt(ts){
+    try { return new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
+    catch(_){ return ""; }
+  }
+
+  // NEW: only change — decide the label shown above each message
+  function labelFor(role){
+    role = (role || '').toUpperCase();
+    if (role === 'PLAYER') return playerLabel;           // show the player's real name
+    if (role === 'EMPLOYEE' || role === 'ADMIN') return 'Support Team';
+    return 'User';
+  }
+
+  function render(items){
+    if(!items) return;
+    if(items.length === 0 && list.children.length === 0){ empty.style.display = ''; } else { empty.style.display = 'none'; }
+    const frag = document.createDocumentFragment();
+    for(const m of items){
+      lastId = Math.max(lastId, m.id);
+
+      const row = document.createElement('div');
+      row.style.display = 'grid';
+      row.style.gridTemplateColumns = '1fr auto';
+      row.style.gap = '6px';
+      row.style.alignItems = 'baseline';
+
+      const who = document.createElement('div');
+      who.style.fontSize='12px';
+      who.style.opacity=.8;
+      who.textContent = labelFor(m.sender_role);   // ← changed from m.sender_role
+
+      const when = document.createElement('div');
+      when.className='muted';
+      when.style.fontSize='11px';
+      when.textContent = fmt(m.created_at);
+
+      const bubble = document.createElement('div');
+      bubble.style.gridColumn='1 / -1';
+      bubble.style.background='rgba(255,255,255,.06)';
+      bubble.style.border='1px solid rgba(255,255,255,.08)';
+      bubble.style.borderRadius='10px';
+      bubble.style.padding='6px 8px';
+      bubble.style.wordBreak='break-word';
+      bubble.textContent = m.body;
+
+      row.append(who, when, bubble);
+      frag.appendChild(row);
+    }
+    list.appendChild(frag);
+    view.scrollTop = view.scrollHeight;
+  }
+
+  async function ensureThread(){
+    if (threadId) return threadId;
+    if (!authed || !isPlayer) return null;
+    try{
+      const res = await fetch('/chat/my-thread-id', {cache:'no-store'});
+      const data = await res.json();
+      if(res.ok && data.ok && data.thread_id){
+        threadId = String(data.thread_id);
+        if(dock) dock.dataset.threadId = threadId;
+        return threadId;
+      }
+      alert((data && data.error) || 'Unable to prepare chat.');
+      return null;
+    }catch(_){
+      alert('Network error while preparing chat.');
+      return null;
+    }
+  }
+
+  async function poll(){
+    if(!threadId) return;
+    try{
+      const res = await fetch(`/chat/thread/${threadId}/messages?after_id=${lastId}`, {cache:'no-store'});
+      if(!res.ok) return;
+      const data = await res.json();
+      if(data && data.ok) render(data.items || []);
+    }catch(_){}
+  }
+
+  async function send(body){
+    if(!threadId){ alert('Chat not ready yet.'); return; }
+    try{
+      const res = await fetch(`/chat/thread/${threadId}/send`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ body })
+      });
+      const data = await res.json();
+      if(res.ok && data.ok){
+        render([data.item]);
+      } else {
+        alert(data.error || 'Failed to send');
+      }
+    }catch(_){
+      alert('Network error');
+    }
+  }
+
+  function start(){ stop(); poll(); timer = setInterval(poll, 3000); }
+  function stop(){ if(timer){ clearInterval(timer); timer = null; } }
+
+  if(toggle){
+    toggle.addEventListener('click', async () => {
+      if(!threadId) await ensureThread();
+      panel.style.display = (panel.style.display === 'none' || !panel.style.display) ? 'block' : 'none';
+      if(panel.style.display === 'block'){
+        start();
+        setTimeout(()=> view.scrollTop = view.scrollHeight, 50);
+        if(input) input.focus();
+      } else {
+        stop();
+      }
+    });
+  }
+
+  if(closeB){
+    closeB.addEventListener('click', () => {
+      panel.style.display='none';
+      stop();
+    });
+  }
+
+  if(form){
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const val = (input.value || '').trim();
+      if(!val) return;
+      input.value = '';
+      if(!threadId){
+        const ok = await ensureThread();
+        if(!ok) return;
+      }
+      send(val);
+    });
+    if(input){
+      input.addEventListener('keydown', (e)=>{
+        if(e.key==='Enter' && !e.shiftKey){
+          e.preventDefault();
+          form.dispatchEvent(new Event('submit'));
+        }
+      });
+    }
+  }
+})();
+</script>

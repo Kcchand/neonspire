@@ -1,0 +1,1 @@
+Missing fields in Create Player dialog: Account, NickName, Login password, Confirm password

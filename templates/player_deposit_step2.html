@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>💰 NeonSpire Casino Deposit — Confirm & pay</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Review your deposit</div>
+    </div>
+
+    <form class="form-grid"
+          method="post"
+          action="{{ url_for('playerbp.deposit_submit') }}"
+          enctype="multipart/form-data">
+
+      <!-- core hidden fields -->
+      <input type="hidden" name="amount" value="{{ amount }}">
+      <input type="hidden" name="method" value="{{ method }}">
+      {% if game %}
+        <input type="hidden" name="game_id" value="{{ game.id }}">
+      {% endif %}
+      <input type="hidden" name="remarks" value="{{ remarks or '' }}">
+
+      <div class="form-group">
+        <label>Amount</label>
+        <div class="pill">
+          ${{ "%.2f"|format(amount|float) }}
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Payment method</label>
+        <div class="pill">
+          {% if method == "CRYPTO" %}
+            💎 Crypto
+          {% elif method == "CHIME" %}
+            🏦 Chime
+          {% else %}
+            {{ method }}
+          {% endif %}
+        </div>
+      </div>
+
+      {% if game %}
+      <div class="form-group">
+        <label>Game</label>
+        <div class="pill">{{ game.name }}</div>
+      </div>
+      {% endif %}
+
+      {% if remarks %}
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Remarks</label>
+        <div class="pill">{{ remarks }}</div>
+      </div>
+      {% endif %}
+
+      {# --------------------------------------------------------------
+         CASINO-SIDE INSTRUCTIONS BY METHOD
+         (just info; player details come in common fields below)
+         -------------------------------------------------------------- #}
+
+      {% if method == "CHIME" %}
+      <!-- Casino Chime details box -->
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Casino Chime details</label>
+        <div class="pill"
+             style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;background:rgba(0,0,0,0.35)">
+
+          <!-- Left: Chime name + copy -->
+          <div style="flex:1;min-width:220px">
+            <div style="font-size:13px;opacity:0.9;margin-bottom:4px">
+              Chime name:
+            </div>
+
+            {% set chime_handle = (settings.chime_handle if settings is defined and settings and settings.chime_handle else 'NeonSpireCasino') %}
+
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-weight:600;font-size:15px;word-break:break-all">
+                {{ chime_handle }}
+              </span>
+              <button
+                type="button"
+                id="copy-chime-handle-btn"
+                data-copy="{{ chime_handle }}"
+                class="btn btn-ghost"
+                style="padding:4px 10px;font-size:12px;line-height:1;border-radius:999px">
+                Copy
+              </button>
+            </div>
+
+            <div style="font-size:11px;opacity:0.7;margin-top:6px">
+              Tap <strong>Copy</strong> and paste this name in your Chime app when you send the payment.
+            </div>
+          </div>
+
+          <!-- Right: QR (small, neat) -->
+          {% if settings is defined and settings and settings.chime_qr_url %}
+          <div style="min-width:140px;display:flex;flex-direction:column;align-items:center;gap:6px">
+            <div style="font-size:12px;opacity:0.85">
+              Scan QR in Chime app
+            </div>
+            <div style="padding:6px;border-radius:12px;background:rgba(0,0,0,0.6);
+                        border:1px solid rgba(255,255,255,0.14)">
+              <img
+                src="{{ settings.chime_qr_url }}"
+                alt="Chime QR"
+                style="width:140px;height:140px;object-fit:contain;border-radius:10px;">
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% elif method == "CRYPTO" %}
+  <div class="form-group" style="grid-column:1/-1">
+    <label>Crypto payment instructions</label>
+    <div class="pill" style="background:rgba(0,0,0,0.35)">
+      Click “Pay Now” to complete your crypto payment.
+    </div>
+  </div>
+{% endif %}
+
+      {# --------------------------------------------------------------
+         PLAYER PAYMENT DETAILS (COMMON FOR CRYPTO + CHIME)
+         These map directly to:
+           - payer_name
+           - payer_details
+           - proof_file (image) → proof_url
+         so employees see them on /employee/deposits.
+         -------------------------------------------------------------- #}
+
+         {# PLAYER PAYMENT DETAILS
+          - Used for CHIME and any other manual methods
+          - NOT used for automated CRYPTO (NOWPayments)
+       #}
+       {% if method != "CRYPTO" %}
+       <div class="form-group">
+         <label>
+           {% if method == "CHIME" %}
+             Your Chime account name
+           {% else %}
+             Name on payment
+           {% endif %}
+           <span style="color:#f66">*</span>
+         </label>
+         <input
+           type="text"
+           name="payer_name"
+           id="payer_name"
+           class="input"
+           placeholder="{% if method == 'CHIME' %}Exact name shown in your Chime app{% else %}Name used on payment{% endif %}"
+           required>
+       </div>
+ 
+       <div class="form-group">
+         <label>
+           {% if method == "CHIME" %}
+             Extra details (Chime tag / memo) <span style="opacity:.7">(optional)</span>
+           {% else %}
+             Payment details <span style="opacity:.7">(optional)</span>
+           {% endif %}
+         </label>
+         <input
+           type="text"
+           name="payer_details"
+           id="payer_details"
+           class="input"
+           placeholder="{% if method == 'CHIME' %}@username, last 4 of card, or memo{% else %}Any extra note to help staff match your payment{% endif %}">
+       </div>
+ 
+       <div class="form-group">
+         <label>Payment proof (screenshot) <span style="color:#f66">*</span></label>
+         <input
+           type="file"
+           name="proof_file"
+           id="proof_file"
+           class="input"
+           accept="image/*"
+           required>
+         <div class="help-text" style="font-size:12px;opacity:0.8;margin-top:4px">
+           Upload a clear screenshot of your payment confirmation.
+         </div>
+       </div>
+       {% endif %}
+
+      <div class="form-actions"
+           style="grid-column:1/-1;display:flex;gap:10px;justify-content:flex-end">
+        <a class="btn btn-ghost" href="{{ url_for('playerbp.deposit_step1') }}">Back</a>
+        <button
+          class="btn btn-primary"
+          type="submit"
+          id="continue-btn">
+          {% if method == "CRYPTO" %}
+            Pay now (Crypto)
+          {% elif method == "CHIME" %}
+            Continue (Chime)
+          {% else %}
+            Continue
+          {% endif %}
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const nameInput  = document.getElementById('payer_name');
+    const proofInput = document.getElementById('proof_file');
+    const btn        = document.getElementById('continue-btn');
+    const copyBtn    = document.getElementById('copy-chime-handle-btn');
+
+    function updateButton() {
+      if (!btn) return;
+
+      // If fields don't exist (some other method), don't block the button
+      const hasName = !nameInput  || nameInput.value.trim().length > 0;
+      const hasFile = !proofInput || (proofInput.files && proofInput.files.length > 0);
+
+      btn.disabled = !(hasName && hasFile);
+    }
+
+    if (nameInput)  nameInput.addEventListener('input',  updateButton);
+    if (proofInput) proofInput.addEventListener('change', updateButton);
+    updateButton();
+
+    // Copy Chime name button (only on CHIME)
+    if (copyBtn && navigator.clipboard) {
+      copyBtn.addEventListener('click', function () {
+        const text = copyBtn.getAttribute('data-copy') || '';
+        navigator.clipboard.writeText(text).then(function () {
+          const oldLabel = copyBtn.innerText;
+          copyBtn.innerText = 'Copied!';
+          setTimeout(function () {
+            copyBtn.innerText = oldLabel;
+          }, 1500);
+        }).catch(function () {
+          const oldLabel = copyBtn.innerText;
+          copyBtn.innerText = 'Copied';
+          setTimeout(function () { copyBtn.innerText = oldLabel; }, 1500);
+        });
+      });
+    }
+  })();
+</script>
+{% endblock %}

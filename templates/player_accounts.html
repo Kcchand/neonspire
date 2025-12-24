@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block hero %}
+{% if not request.args.get('noinfo') %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>🔑 Your game credentials will appear here automatically once ready.</span>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<style>
+  /* --- Controls look: muted when disabled, bright green when active --- */
+  .privy { font-variant-numeric: slashed-zero tabular-nums; }
+  .pill-act {
+    padding: 6px 12px;
+    border: 1px solid var(--stroke);
+    border-radius: 999px;
+    cursor: pointer;
+    background: rgba(255,255,255,.04);
+    color: #c9d1f5;
+    font-weight: 700;
+    transition: filter .15s ease, transform .02s ease;
+  }
+  .pill-act[disabled] {
+    opacity: .55;
+    cursor: not-allowed;
+    filter: grayscale(.25);
+  }
+  /* Green “approved” look when the button is usable */
+  .pill-act:not([disabled]) {
+    background: linear-gradient(180deg,#12d9a1,#0fb98a);
+    border-color: transparent;
+    color: #05281b;
+    box-shadow: 0 6px 18px rgba(18,217,161,.28);
+  }
+  .pill-act:not([disabled]):hover { filter: brightness(1.05); }
+  .pill-act:not([disabled]):active { transform: translateY(1px); }
+
+  /* “Show/Hide” primary toggle is always active green */
+  .pill-act--primary {
+    background: linear-gradient(180deg,#12d9a1,#0fb98a) !important;
+    border-color: transparent !important;
+    color: #05281b !important;
+    box-shadow: 0 6px 18px rgba(18,217,161,.28);
+  }
+
+  .masked { letter-spacing: 2px; }
+  .chip-ok { background:rgba(18,217,161,.12); border:1px solid rgba(18,217,161,.35); color:#12d9a1; border-radius:999px; padding:2px 8px; font-weight:700 }
+  .chip-warn { background:rgba(255,186,41,.12); border:1px solid rgba(255,186,41,.35); color:#ffba29; border-radius:999px; padding:2px 8px; font-weight:700 }
+  .chip-bad { background:rgba(255,93,93,.12); border:1px solid rgba(255,93,93,.35); color:#ff5d5d; border-radius:999px; padding:2px 8px; font-weight:700 }
+  .chip-pending { background:rgba(154,163,194,.12); border:1px solid rgba(154,163,194,.35); color:#c9d1f5; border-radius:999px; padding:2px 8px; font-weight:700 }
+  .t-actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap }
+  .safetynote { margin-top:10px; font-size:12px; color:#9aa3c2 }
+</style>
+
+<div class="shell" style="margin-top:16px">
+
+  <!-- Accounts -->
+  <div class="panel">
+    <div class="panel-head" style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div>
+        <div class="h3">My Game Logins</div>
+        <div class="muted">Your login details (auto-setup)</div>
+      </div>
+
+      <!-- NEW: Player self-serve JUWA ID request -->
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div class="safetynote">Tip: Only reveal credentials when you need to, and never share screenshots.</div>
+        <form method="post" action="{{ url_for('playerbp.juwa_request_id') }}">
+          {% if csrf_token is defined %}
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          {% endif %}
+        </form>
+      </div>
+      <!-- /NEW -->
+    </div>
+
+    <div class="table">
+      <div class="t-head">
+        <div>Game</div>
+        <div>Username</div>
+        <div>Password</div>
+        <div>Note / Status</div>
+        <div class="t-right">Actions</div>
+      </div>
+
+      {% if accounts %}
+        {% for a in accounts %}
+          {% set uname = (a.username or "") %}
+          {% set pword = (a.password or "") %}
+          <div class="t-row privy" data-row="acct">
+            <div>{{ a.game|e }}</div>
+
+            <!-- Username (masked by default) -->
+            <div>
+              <span class="masked" data-secret="username" data-masked="true">
+                {{ '•' * (uname|length if uname else 6) }}
+              </span>
+              <span class="real" data-real-username hidden>{{ uname|e }}</span>
+            </div>
+
+            <!-- Password (masked by default) -->
+            <div>
+              <span class="masked" data-secret="password" data-masked="true">
+                {{ '•' * (pword|length if pword else 8) }}
+              </span>
+              <span class="real" data-real-password hidden>{{ pword|e }}</span>
+            </div>
+
+            <div>{{ (a.note or "—")|e }}</div>
+
+            <!-- Actions -->
+            <div class="t-actions">
+              <button class="pill-act pill-act--primary" data-action="toggle" aria-label="Reveal or hide credentials">Show</button>
+              <button class="pill-act" data-action="copy-user" aria-label="Copy username" disabled>Copy User</button>
+              <button class="pill-act" data-action="copy-pass" aria-label="Copy password" disabled>Copy Pass</button>
+            </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty muted">No credentials yet.</div>
+      {% endif %}
+    </div>
+  </div>
+
+ 
+
+</div>
+
+<script>
+/* Keep credentials masked by default; enable green buttons on reveal. */
+(function(){
+  function revealRow(row){
+    const masked = row.querySelectorAll('[data-secret][data-masked="true"]');
+    masked.forEach(el => {
+      const type = el.getAttribute('data-secret');
+      const real = row.querySelector(type === 'username' ? '[data-real-username]' : '[data-real-password]');
+      if(real){
+        el.textContent = real.textContent;
+        el.dataset.masked = "false";
+      }
+    });
+    row.querySelectorAll('[data-action="copy-user"],[data-action="copy-pass"]').forEach(b=>b.disabled=false);
+    const toggle = row.querySelector('[data-action="toggle"]');
+    if(toggle) toggle.textContent = "Hide";
+  }
+
+  function hideRow(row){
+    const uReal = row.querySelector('[data-real-username]');
+    const pReal = row.querySelector('[data-real-password]');
+    const uMask = row.querySelector('[data-secret="username"]');
+    const pMask = row.querySelector('[data-secret="password"]');
+    if(uMask){
+      const len = (uReal && uReal.textContent) ? uReal.textContent.length : 6;
+      uMask.textContent = '•'.repeat(Math.max(6, len));
+      uMask.dataset.masked = "true";
+    }
+    if(pMask){
+      const len = (pReal && pReal.textContent) ? pReal.textContent.length : 8;
+      pMask.textContent = '•'.repeat(Math.max(8, len));
+      pMask.dataset.masked = "true";
+    }
+    row.querySelectorAll('[data-action="copy-user"],[data-action="copy-pass"]').forEach(b=>b.disabled=true);
+    const toggle = row.querySelector('[data-action="toggle"]');
+    if(toggle) toggle.textContent = "Show";
+  }
+
+  function rowIsRevealed(row){
+    return !row.querySelector('[data-secret][data-masked="true"]');
+  }
+
+  async function doCopy(text){
+    try{ await navigator.clipboard.writeText(text); }
+    catch(e){
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    }
+  }
+
+  document.addEventListener('click', function(ev){
+    const btn = ev.target.closest('[data-action]');
+    if(!btn) return;
+    const row = btn.closest('[data-row="acct"]');
+    if(!row) return;
+    const action = btn.getAttribute('data-action');
+
+    if(action === 'toggle'){
+      if(rowIsRevealed(row)){ hideRow(row); } else { revealRow(row); }
+      return;
+    }
+
+    if(action === 'copy-user'){
+      const real = row.querySelector('[data-real-username]');
+      if(real && !btn.disabled){
+        doCopy(real.textContent.trim());
+        btn.textContent = 'Copied'; setTimeout(() => btn.textContent = 'Copy User', 1400);
+      }
+      return;
+    }
+
+    if(action === 'copy-pass'){
+      const real = row.querySelector('[data-real-password]');
+      if(real && !btn.disabled){
+        doCopy(real.textContent.trim());
+        btn.textContent = 'Copied'; setTimeout(() => btn.textContent = 'Copy Pass', 1400);
+      }
+      return;
+    }
+  }, false);
+})();
+</script>
+{% endblock %}

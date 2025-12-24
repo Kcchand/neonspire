@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="hero" style="padding-bottom:0"></div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .auth-wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}
+  .auth-card{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
+             border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px;
+             box-shadow:0 14px 40px rgba(0,0,0,.35)}
+  .auth-side{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
+             border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px}
+  .auth-title{font-size:26px;margin:0 0 2px 0}
+  .auth-sub{color:#9aa3c2;margin:0 0 14px 0}
+  .fg{display:grid;gap:8px;margin-bottom:12px}
+  .fg label{color:#9aa3c2;font-size:13px}
+  .fg input{background:#11162a;border:1px solid rgba(255,255,255,.1);color:#e7ecff;
+            padding:12px;border-radius:12px;outline:none}
+  .fg input:focus{border-color:rgba(18,217,161,.45);box-shadow:0 0 0 6px rgba(18,217,161,.08)}
+  .muted{color:#9aa3c2}
+  .btn-wide{width:100%;font-weight:700}
+  .list{margin:8px 0 0 0;padding:0}
+  .list li{list-style:none;display:flex;gap:10px;align-items:flex-start;margin:8px 0}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
+         font-size:12px;border:1px solid rgba(255,255,255,.12)}
+  .badge-primary{background:linear-gradient(180deg,#12d9a1,#0fb98a);color:#041813;border:none}
+  @media (max-width:900px){.auth-wrap{grid-template-columns:1fr}}
+</style>
+
+<div class="auth-wrap">
+  <!-- Left: Register form -->
+  <div class="auth-card">
+    <h1 class="auth-title">Create Account</h1>
+    <p class="auth-sub">Create your account in seconds. No email code required to start playing.</p>
+    <form id="registerForm" method="post" action="{{ url_for('auth.register_post') }}" class="auth-form">
+      {# If the page is opened with ?ref=AB1234, pass it through to the server #}
+      {% set refcode = request.args.get('ref') %}
+      {% if refcode %}
+        <input type="hidden" name="ref" value="{{ refcode }}">
+      {% endif %}
+
+      <div class="fg">
+        <label for="name">Full Name</label>
+        <input id="name" name="name" type="text" placeholder="Jane Player" required>
+      </div>
+
+      <div class="fg">
+  <label for="email">
+    Email
+    <span class="muted" style="font-size:11px;">(for login & account recovery – no spam)</span>
+  </label>
+  <input id="email" name="email" type="email" placeholder="you@example.com" required>
+</div>
+
+    
+      <div class="fg">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" placeholder="Create a strong password" required>
+      </div>
+
+      <div class="fg">
+        <label for="confirm_password">Confirm Password</label>
+        <input id="confirm_password" name="confirm_password" type="password" placeholder="Re-enter your password" required>
+      </div>
+
+      <button class="btn btn-primary btn-wide" type="submit">Create & Start Playing</button>
+    </form>
+
+    <p class="muted" style="margin-top:12px">
+  ✅ You can start playing immediately after creating your account.
+  You can always update your email or details later in your profile.
+</p>
+
+<p class="muted" style="margin-top:8px">
+  Already have an account?
+  <a href="{{ url_for('auth.login_get') }}" style="color:#12d9a1;text-decoration:none">Sign in</a>
+</p>
+  </div>
+
+  <!-- Right: Highlights -->
+  <aside class="auth-side">
+    <div class="badge badge-primary">Welcome to NeonSpire Casino</div>
+    <h3 style="margin:12px 0 6px 0">What you get</h3>
+    <ul class="list">
+      <li>⚡ Easy & automatic account setup</li>
+      <li>💳 100% secure & fast credits</li>
+      <li>🔔 Instant notifications on approvals</li>
+      <li>📲 Mobile-friendly experience</li>
+    </ul>
+
+    <div style="
+      margin-top:12px;
+      display:block;
+      width:100%;
+      text-align:center;
+      background:linear-gradient(180deg,var(--brand),var(--brand-2));
+      color:#05281b;
+      font-weight:900;
+      padding:12px 14px;
+      border-radius:14px;
+      box-shadow:0 8px 24px rgba(25,225,165,.28);
+    ">
+      🎁 Join us now and get exciting bonuses
+    </div>
+
+        <div class="card card-glass" style="margin-top:12px">
+      <div class="h4">Already registered?</div>
+      <div class="muted">Jump right back in.</div>
+      <a class="btn btn-ghost" style="margin-top:10px" href="{{ url_for('auth.login_get') }}">Go to Sign In</a>
+    </div>
+  </aside>
+</div>
+
+<!-- Custom Error Modal -->
+<div id="errorModal" class="modal-overlay" style="display:none;">
+  <div class="modal-box">
+    <div class="modal-title">⚠️ Password Mismatch</div>
+    <div class="modal-body">Passwords do not match. Please re-enter.</div>
+    <button class="modal-btn" onclick="closeErrorModal()">OK</button>
+  </div>
+</div>
+
+<style>
+.modal-overlay{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;
+  z-index:9999;backdrop-filter:blur(4px);
+}
+.modal-box{
+  background:#11162a;padding:24px 28px;border-radius:16px;
+  max-width:380px;width:90%;
+  border:1px solid rgba(255,255,255,.12);
+  box-shadow:0 10px 40px rgba(0,0,0,.45);
+  text-align:center;
+  animation:popIn .25s ease;
+}
+.modal-title{
+  font-size:20px;font-weight:700;margin-bottom:10px;color:#ff6565;
+}
+.modal-body{
+  color:#cbd3f8;font-size:15px;margin-bottom:18px;
+}
+.modal-btn{
+  background:linear-gradient(180deg,#12d9a1,#0fb98a);
+  border:none;color:#05281b;font-weight:700;
+  padding:10px 18px;border-radius:12px;cursor:pointer;width:100%;
+}
+@keyframes popIn{
+  from{transform:scale(.85);opacity:0}
+  to{transform:scale(1);opacity:1}
+}
+</style>
+
+<script>
+function showErrorModal() {
+  document.getElementById("errorModal").style.display = "flex";
+}
+function closeErrorModal() {
+  document.getElementById("errorModal").style.display = "none";
+}
+
+document.getElementById("registerForm").addEventListener("submit", function(e){
+  const pass = document.getElementById("password").value.trim();
+  const confirm = document.getElementById("confirm_password").value.trim();
+
+  if(pass !== confirm){
+    e.preventDefault();
+    showErrorModal();
+    return false;
+  }
+});
+</script>
+{% endblock %}

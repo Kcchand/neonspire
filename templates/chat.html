@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell" style="margin-top:14px;max-width:900px">
+
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+    <div class="h3">Live Chat</div>
+    <div class="muted">
+      Room: <strong>{{ room }}</strong>
+      {% if current_user.is_authenticated %}
+        • You are: {{ current_user.name or current_user.email }} ({{ current_user.role }})
+      {% else %}
+        • You are: Guest (read-only until login)
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel" style="display:flex;flex-direction:column;gap:10px">
+    <!-- Messages -->
+    <div id="chatScroll" style="height:420px;overflow:auto;border:1px solid var(--stroke);border-radius:10px;padding:10px;background:var(--panel)">
+      <div id="messages">
+        {% for m in history %}
+        <div class="msg" data-id="{{ m.id }}" style="margin-bottom:8px">
+          <div class="muted" style="font-size:12px">
+            <strong>{{ m.user_name }}</strong> • {{ m.user_role or 'USER' }} • {{ m.created_at[:16].replace('T', ' ') }}
+          </div>
+          <div>{{ m.message }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Typing -->
+    <div id="typing" class="muted" style="height:18px;font-size:12px"></div>
+
+    <!-- Composer -->
+    <form id="composer" onsubmit="return false" style="display:flex;gap:8px">
+      <input id="msgInput" class="input" placeholder="Type a message..." style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+      <button id="sendBtn" class="btn btn-primary">Send</button>
+    </form>
+
+    {% if not current_user.is_authenticated %}
+      <div class="muted" style="font-size:12px">
+        Sign in to participate: <a class="link" href="{{ url_for('auth.login_get') }}">Login</a> • <a class="link" href="{{ url_for('auth.register_get') }}">Register</a>
+      </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- Socket.IO client -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-gv1f6bqv1j5hQxY8R7Q7f3s1G9Cj6y3z5ZbqHkZ5M6uS6Kv2N1Y3a6iE0F8EoQwM" crossorigin="anonymous"></script>
+
+<script>
+(function(){
+  const room = {{ room|tojson }};
+  const authed = {{ 'true' if current_user.is_authenticated else 'false' }};
+  const socket = io();
+
+  const messages = document.getElementById('messages');
+  const scrollBox = document.getElementById('chatScroll');
+  const typing = document.getElementById('typing');
+  const input = document.getElementById('msgInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const composer = document.getElementById('composer');
+
+  function scrollToBottom(){
+    scrollBox.scrollTop = scrollBox.scrollHeight;
+  }
+
+  socket.on("connect", () => {
+    socket.emit("join", { room });
+  });
+
+  socket.on("chat:new", (m) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg';
+    wrap.dataset.id = m.id;
+    wrap.style = 'margin-bottom:8px';
+    wrap.innerHTML = `
+      <div class="muted" style="font-size:12px">
+        <strong>${m.user_name}</strong> • ${m.user_role || 'USER'} • ${m.created_at.slice(0,16).replace('T',' ')}
+      </div>
+      <div>${escapeHtml(m.message)}</div>
+    `;
+    messages.appendChild(wrap);
+    scrollToBottom();
+  });
+
+  socket.on("chat:typing", (data) => {
+    typing.textContent = (data && data.name) ? (data.name + " is typing…") : "";
+    setTimeout(() => { typing.textContent = ""; }, 1200);
+  });
+
+  // Guests can read but not send
+  if (!authed) {
+    input.disabled = true;
+    sendBtn.disabled = true;
+  } else {
+    let lastEmit = 0;
+    input.addEventListener('input', () => {
+      const now = Date.now();
+      if (now - lastEmit > 500) {
+        socket.emit("chat:typing", { room });
+        lastEmit = now;
+      }
+    });
+
+    composer.addEventListener('submit', () => {
+      const text = (input.value || "").trim();
+      if (!text) return false;
+      socket.emit("chat:message", { room, message: text });
+      input.value = "";
+      return false;
+    });
+  }
+
+  // helpers
+  function escapeHtml(s){
+    return (s || "").replace(/[&<>"']/g, (ch) => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+
+  // make sure the initial history is visible
+  scrollToBottom();
+})();
+</script>
+{% endblock %}

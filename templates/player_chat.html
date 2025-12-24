@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% set page_title = "Support Chat" %}
+
+{% block content %}
+<div class="shell" style="max-width:860px">
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <div>
+      <div class="h3">Support Chat</div>
+      <div class="muted">You and staff can message here privately.</div>
+    </div>
+    <div>
+      <a class="btn" href="{{ url_for('index') }}">← Back to Lobby</a>
+    </div>
+  </div>
+
+  {# IMPORTANT: include the widget WITH the thread variable #}
+  {% include "_dm_widget.html" with context %}
+{% endblock %}

@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell admin-wrap" style="margin-top:14px">
+
+  <!-- Header -->
+  <div class="panel">
+    <div class="admin-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div class="admin-title">Employee Console</div>
+      <div class="admin-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn chip-btn" href="{{ url_for('employeebp.deposits_list') }}">Deposits</a>
+        <a class="btn chip-btn" href="{{ url_for('employeebp.requests_list') }}">Game Requests</a>
+        <!-- FIXED: removed broken ready_accounts_page -->
+        <!-- <a class="btn chip-btn" href="{{ url_for('employeebp.ready_accounts_page') }}">Ready Accounts</a> -->
+        <a class="btn chip-btn" href="{{ url_for('employeebp.withdrawals_list') }}">Withdrawals</a>
+        <a class="btn chip-btn btn-primary" href="{{ url_for('chat_bp.inbox') }}">Live Chat</a>
+      </div>
+    </div>
+    <div class="muted">
+      Process player deposits, approve/reject game login requests, pay withdrawals, and chat with players directly.
+    </div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="admin-metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+    <div class="metric panel" style="padding:14px">
+      <div class="metric-label muted">Pending Deposits</div>
+      <div class="metric-value" style="font-size:28px;font-weight:800;line-height:1.2">{{ pending_deposits or 0 }}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-mini btn-primary" href="{{ url_for('employeebp.deposits_list') }}">Review Deposits</a>
+      </div>
+    </div>
+
+    <div class="metric panel" style="padding:14px">
+      <div class="metric-label muted">Pending Game Requests</div>
+      <div class="metric-value" style="font-size:28px;font-weight:800;line-height:1.2">{{ pending_requests or 0 }}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-mini" href="{{ url_for('employeebp.requests_list') }}">Provide Logins</a>
+      </div>
+      <div class="muted" style="margin-top:6px;font-size:12px">
+        Tip: Open a request with <b>Provide Logins</b>. Inside the card you'll find <b>Save</b>, <b>Approve</b>, and <b>Reject</b>.
+      </div>
+    </div>
+
+    <div class="metric panel" style="padding:14px">
+      <div class="metric-label muted">Pending Withdrawals</div>
+      <div class="metric-value" style="font-size:28px;font-weight:800;line-height:1.2">{{ pending_withdraws or 0 }}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-mini" href="{{ url_for('employeebp.withdrawals_list') }}">Pay Out</a>
+      </div>
+    </div>
+
+    <div class="metric panel" style="padding:14px">
+      <div class="metric-label muted">Bonus Statistics</div>
+      <div class="metric-value" style="font-size:16px;font-weight:800;line-height:1.2">
+        {% if bonus_stats %}
+          {{ bonus_stats.first_time_bonus_count or 0 }} First<br>{{ bonus_stats.regular_bonus_count or 0 }} Regular
+        {% else %}
+          0 First<br>0 Regular
+        {% endif %}
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-mini" href="{{ url_for('employeebp.employee_bonus') }}" style="background-color:#8b5cf6;border-color:#8b5cf6;">
+          ⚙️ Bonus Settings
+        </a>
+      </div>
+      <div class="muted" style="margin-top:6px;font-size:12px">
+        First-time: {{ settings.first_deposit_bonus_percent or 60 }}%<br>
+        Regular: {{ settings.regular_deposit_bonus_percent or 20 }}%
+      </div>
+    </div>
+  </div>
+
+  <!-- Work Queues Shortcuts -->
+  <div class="panel" style="margin-top:12px">
+    <div class="section-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div class="section-title">Work Queues</div>
+    </div>
+    <div class="chip-row" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+      <a class="chip" href="{{ url_for('employeebp.deposits_list') }}">💳 Review Deposits</a>
+      <a class="chip" href="{{ url_for('employeebp.requests_list') }}">🔐 Provide Game Logins</a>
+      <a class="chip" href="{{ url_for('employeebp.withdrawals_list') }}">💸 Handle Withdrawals</a>
+      <a class="chip" href="{{ url_for('chat_bp.inbox') }}">💬 Live Chat Inbox</a>
+      <!-- NEW: Bonus Management Chip -->
+      <a class="chip" href="{{ url_for('employeebp.deposits_list') }}?filter=first_bonus" style="background:rgba(139, 92, 246, 0.1);color:#a78bfa;border-color:#8b5cf6;">
+        🎁 First-Time Bonuses
+      </a>
+      <a class="chip" href="{{ url_for('employeebp.employee_bonus') }}" style="background:rgba(139, 92, 246, 0.1);color:#a78bfa;border-color:#8b5cf6;">
+        ⚙️ Configure Bonuses
+      </a>
+    </div>
+  </div>
+
+  <!-- Bonus Quick Actions Panel -->
+  <div class="panel" style="margin-top:12px;border-left:4px solid #8b5cf6;">
+    <div class="section-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div class="section-title" style="color:#a78bfa;">🎁 Bonus Management</div>
+      <div class="muted" style="font-size:13px">
+        {% if settings and settings.bonus_active %}
+          <span style="color:#4ade80;">●</span> Bonus system is ACTIVE
+        {% else %}
+          <span style="color:#f87171;">●</span> Bonus system is INACTIVE
+        {% endif %}
+      </div>
+    </div>
+    
+    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px;margin-top:12px;">
+      <div class="card" style="padding:12px;border:1px solid rgba(139, 92, 246, 0.2);border-radius:10px;background:rgba(139, 92, 246, 0.05);">
+        <div style="font-weight:600;margin-bottom:6px;color:#a78bfa;">First Deposit Bonus</div>
+        <div style="font-size:24px;font-weight:700;color:#fff;">
+          {{ settings.first_deposit_bonus_percent or 60 }}%
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:4px;">
+          Min: ${{ settings.first_deposit_min_amount or 30.00 }}
+        </div>
+        <div style="margin-top:10px;">
+          <a class="btn btn-mini" href="{{ url_for('employeebp.deposits_list') }}?filter=first_bonus" style="background:#8b5cf6;border-color:#8b5cf6;color:#fff;">
+            View Eligible
+          </a>
+        </div>
+      </div>
+      
+      <div class="card" style="padding:12px;border:1px solid rgba(96, 165, 250, 0.2);border-radius:10px;background:rgba(96, 165, 250, 0.05);">
+        <div style="font-weight:600;margin-bottom:6px;color:#60a5fa;">Regular Bonus</div>
+        <div style="font-size:24px;font-weight:700;color:#fff;">
+          {{ settings.regular_deposit_bonus_percent or 20 }}%
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:4px;">
+          Min: ${{ settings.regular_deposit_min_amount or 25.00 }}
+        </div>
+        <div style="margin-top:10px;">
+          <a class="btn btn-mini" href="{{ url_for('employeebp.deposits_list') }}" style="background:#60a5fa;border-color:#60a5fa;color:#fff;">
+            View Deposits
+          </a>
+        </div>
+      </div>
+      
+      <div class="card" style="padding:12px;border:1px solid rgba(74, 222, 128, 0.2);border-radius:10px;background:rgba(74, 222, 128, 0.05);">
+        <div style="font-weight:600;margin-bottom:6px;color:#4ade80;">Quick Actions</div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
+          <a class="btn btn-mini" href="{{ url_for('employeebp.employee_bonus') }}" style="background:rgba(139, 92, 246, 0.1);color:#a78bfa;border-color:#8b5cf6;">
+            ⚙️ Edit Bonus Rules
+          </a>
+          <a class="btn btn-mini" href="{{ url_for('employeebp.requests_list') }}?type=bonus" style="background:rgba(96, 165, 250, 0.1);color:#60a5fa;border-color:#60a5fa;">
+            📋 Bonus Requests
+          </a>
+          <a class="btn btn-mini" href="{{ url_for('employeebp.deposits_list') }}?filter=first_bonus" style="background:rgba(74, 222, 128, 0.1);color:#4ade80;border-color:#4ade80;">
+            👤 Mark First Bonus
+          </a>
+        </div>
+      </div>
+    </div>
+    
+    <div class="muted" style="margin-top:12px;font-size:13px;padding:10px;background:rgba(255,255,255,0.03);border-radius:8px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <span style="color:#fbbf24;">💡</span>
+        <span style="font-weight:600;">Bonus Rules:</span>
+      </div>
+      <div style="margin-left:24px;">
+        • First-time bonus: {{ settings.first_deposit_bonus_percent or 60 }}% on ${{ settings.first_deposit_min_amount or 30.00 }}+<br>
+        • Regular bonus: {{ settings.regular_deposit_bonus_percent or 20 }}% on ${{ settings.regular_deposit_min_amount or 25.00 }}+<br>
+        • Wagering: {{ settings.bonus_wagering_requirement or 1.0 }}x • Expiry: {{ settings.bonus_expiry_days or 30 }} days
+      </div>
+    </div>
+  </div>
+
+  <!-- Players Information (searchable + scrollable) -->
+  <div class="panel" style="margin-top:12px" id="playersPanel">
+    <div class="section-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div class="section-title">Players</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="playersSearch" class="input" placeholder="Search name / email / phone / referral…" style="min-width:260px">
+        <div class="muted" id="playersCount">
+          {% set total = (players|length if players else 0) %}
+          Showing <b>{{ total }}</b> of <b>{{ total }}</b>
+        </div>
+      </div>
+    </div>
+
+    {% if players and players|length %}
+      <style>
+        #playersScrollWrap{ max-height:420px; overflow:auto; border-radius:14px; }
+        #playersTable .t-head{
+          position:sticky; top:0; z-index:1;
+          background: rgba(18,20,25,.98);
+          backdrop-filter: blur(6px);
+          border-bottom: 1px solid var(--stroke, #2a2e37);
+        }
+        #playersTable .t-row{ transition: background .12s ease; }
+        #playersTable .t-row:hover{ background: rgba(255,255,255,.03); }
+        .badge{ display:inline-flex; align-items:center; justify-content:center; min-width:1.6em; padding:0 .4em; border-radius:999px; background:rgba(255,255,255,.08) }
+        .refcode{ user-select: all; }
+        .bonus-badge{ 
+          display:inline-flex; 
+          align-items:center; 
+          gap:4px; 
+          padding:2px 8px; 
+          border-radius:10px; 
+          font-size:11px; 
+          font-weight:600; 
+          margin-top:4px; 
+        }
+        .first-bonus-badge{ background:rgba(74, 222, 128, 0.15); color:#4ade80; border:1px solid rgba(74, 222, 128, 0.3); }
+        .used-bonus-badge{ background:rgba(96, 165, 250, 0.15); color:#60a5fa; border:1px solid rgba(96, 165, 250, 0.3); }
+        .no-bonus-badge{ background:rgba(148, 163, 184, 0.15); color:#94a3b8; border:1px solid rgba(148, 163, 184, 0.3); }
+        @media (max-width:900px){ #playersScrollWrap{ max-height:60vh; } }
+      </style>
+
+      <div id="playersScrollWrap">
+        <div class="table" id="playersTable">
+          <div class="t-head">
+            <div>Player</div>
+            <div>Contact</div>
+            <div>Bonus Status</div>
+            <div>Referral</div>
+            <div class="t-right">Games</div>
+            <div>Last Request</div>
+            <div>Joined</div>
+          </div>
+
+          {% for p in players %}
+            {% set search_text = (p.name or '') ~ ' ' ~ (p.email or '') ~ ' ' ~ (p.mobile or '') ~ ' ' ~ (p.refcode or '') ~ ' ' ~ (p.last_game or '') %}
+            <div class="t-row" data-search="{{ search_text|lower }}">
+              <!-- Player -->
+              <div>
+                <div style="font-weight:700">{{ p.name or ('User #' ~ p.id) }}</div>
+                <div class="muted" style="font-size:12px">{{ p.email }}</div>
+                {% if p.has_used_first_deposit_bonus %}
+                  <div class="bonus-badge used-bonus-badge">
+                    <span>✅</span> Used First Bonus
+                  </div>
+                {% elif p.has_deposited %}
+                  <div class="bonus-badge first-bonus-badge">
+                    <span>🎁</span> Eligible for {{ settings.first_deposit_bonus_percent or 60 }}% Bonus
+                  </div>
+                {% else %}
+                  <div class="bonus-badge no-bonus-badge">
+                    <span>⏳</span> No Deposit Yet
+                  </div>
+                {% endif %}
+              </div>
+
+              <!-- Contact -->
+              <div>
+                {% if p.mobile %}
+                  <span class="mono">{{ p.mobile }}</span>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </div>
+
+              <!-- Bonus Status -->
+              <div>
+                {% if p.has_used_first_deposit_bonus %}
+                  <span style="color:#60a5fa;font-weight:600;">Regular ({{ settings.regular_deposit_bonus_percent or 20 }}%)</span>
+                {% elif p.has_deposited %}
+                  <span style="color:#4ade80;font-weight:600;">First-time ({{ settings.first_deposit_bonus_percent or 60 }}%)</span>
+                {% else %}
+                  <span class="muted">No Deposit</span>
+                {% endif %}
+              </div>
+
+              <!-- Referral -->
+              <div>
+                {% if p.refcode %}
+                  <code class="mono refcode" title="Click-drag to copy">{{ p.refcode }}</code>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </div>
+
+              <!-- Games count -->
+              <div class="t-right">
+                <span class="badge">{{ p.games_count or 0 }}</span>
+              </div>
+
+              <!-- Last Requested Game -->
+              <div>
+                {% if p.last_game and p.last_game_id %}
+                  <a class="link" href="{{ url_for('employeebp.requests_list_by_game', game_id=p.last_game_id) }}">{{ p.last_game }}</a>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </div>
+
+              <!-- Joined -->
+              <div class="mono">
+                {% if p.joined %}{{ p.joined.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <script>
+        (function(){
+          const input   = document.getElementById('playersSearch');
+          const rows    = Array.from(document.querySelectorAll('#playersTable .t-row'));
+          const counter = document.getElementById('playersCount');
+          function update(){
+            const q = (input.value || '').trim().toLowerCase();
+            let shown = 0;
+            for(const r of rows){
+              const hay = r.dataset.search || '';
+              const hit = !q || hay.includes(q);
+              r.style.display = hit ? '' : 'none';
+              if(hit) shown++;
+            }
+            counter.innerHTML = `Showing <b>${shown}</b> of <b>${rows.length}</b>`;
+          }
+          input.addEventListener('input', update);
+          input.addEventListener('keydown', (e)=>{ if(e.key==='Escape'){ input.value=''; update(); }});
+          update();
+        })();
+      </script>
+    {% else %}
+      <div class="empty">No players yet.</div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

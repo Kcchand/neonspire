@@ -1,0 +1,141 @@
+{# templates/player_deposit_processing.html #}
+{% extends "base.html" %}
+{% block title %}Processing deposit{% endblock %}
+
+{% block content %}
+<div class="page page-centered">
+  <div class="card card-modal card-dark" id="deposit-processing-card">
+    <!-- PROCESSING STATE --------------------------------------------------- -->
+    <div id="state-processing">
+      <div class="spinner mb-4"></div>
+      <h2 class="mb-2">Processing deposit…</h2>
+      <p class="text-muted mb-3">
+        Please wait, your deposit is being processed.<br>
+        This page will update automatically.
+      </p>
+    </div>
+
+    <!-- SUCCESS STATE ------------------------------------------------------ -->
+    <div id="state-success" class="hidden">
+      <div class="icon-circle icon-success mb-4">✓</div>
+      <h2 class="mb-2">Deposit successful 🎉</h2>
+      <p class="text-muted mb-4">
+        Your payment has been received and your balance has been updated.
+      </p>
+      <!-- ✅ Go to index (lobby/home) after success -->
+      <a href="{{ url_for('index') }}"
+         class="btn btn-primary btn-block">
+        Go to lobby
+      </a>
+    </div>
+
+    <!-- FAILED STATE ------------------------------------------------------- -->
+    <div id="state-failed" class="hidden">
+      <div class="icon-circle icon-error mb-4">!</div>
+      <h2 class="mb-2">Payment failed</h2>
+      <p class="text-muted mb-4">
+        Your payment has been failed. Please try again from the deposit page.
+      </p>
+      <a href="{{ url_for('playerbp.deposit_step1') }}"
+         class="btn btn-primary btn-block">
+        Try deposit again
+      </a>
+    </div>
+  </div>
+</div>
+
+<style>
+  .page-centered {
+    min-height: 70vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .card-modal {
+    max-width: 420px;
+    margin: 0 auto;
+    text-align: center;
+    padding: 2.5rem 2rem;
+  }
+  .spinner {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 3px solid rgba(255,255,255,0.2);
+    border-top-color: #4ade80;
+    animation: spin 0.9s linear infinite;
+    margin: 0 auto;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  .icon-circle {
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    margin: 0 auto;
+  }
+  .icon-success {
+    background: rgba(34,197,94,0.15);
+    color: #4ade80;
+  }
+  .icon-error {
+    background: rgba(248,113,113,0.15);
+    color: #f97373;
+  }
+  .hidden { display: none; }
+</style>
+
+<script>
+  const DEPOSIT_ID = {{ deposit.id }};
+  const STATUS_URL = "{{ url_for('playerbp.deposit_status_json', dep_id=deposit.id) }}";
+
+  const $processing = document.getElementById("state-processing");
+  const $success    = document.getElementById("state-success");
+  const $failed     = document.getElementById("state-failed");
+
+  function showState(which) {
+    $processing.classList.add("hidden");
+    $success.classList.add("hidden");
+    $failed.classList.add("hidden");
+    if (which === "success") $success.classList.remove("hidden");
+    else if (which === "failed") $failed.classList.remove("hidden");
+    else $processing.classList.remove("hidden");
+  }
+
+  async function pollStatus() {
+    try {
+      const res  = await fetch(STATUS_URL, { cache: "no-store" });
+      if (!res.ok) throw new Error("bad status");
+      const data = await res.json();
+
+      const rawStatus = (data.status || "").toString();
+      const status    = rawStatus.toUpperCase();
+
+      const SUCCESS_STATUSES = ["COMPLETED", "LOADED", "RECEIVED", "PAID", "SUCCESS"];
+      const FAILED_STATUSES  = ["FAILED", "REJECTED", "CANCELLED", "CANCELED", "ERROR"];
+
+      if (SUCCESS_STATUSES.includes(status)) {
+        showState("success");
+        return;
+      }
+      if (FAILED_STATUSES.includes(status)) {
+        showState("failed");
+        return;
+      }
+
+      showState("processing");
+    } catch (e) {
+      console.error("deposit status poll error:", e);
+      showState("processing");
+    }
+    setTimeout(pollStatus, 3000);
+  }
+
+  document.addEventListener("DOMContentLoaded", pollStatus);
+</script>
+{% endblock %}

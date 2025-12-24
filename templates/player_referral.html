@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="shell" style="max-width:680px">
+  <div class="panel">
+    <div class="h3">My Referral</div>
+    <p class="muted">Share this link with friends. When they open it, we’ll know it came from you.</p>
+
+    <div class="grid" style="display:grid;gap:10px">
+      <label class="muted">Your Code</label>
+      <input class="input" value="{{ code }}" readonly onclick="this.select()">
+      <label class="muted">Your Link</label>
+      <input class="input" value="{{ link }}" readonly onclick="this.select()">
+      <div style="margin-top:10px">
+        <a class="btn btn-primary" href="{{ link }}" target="_blank">Open Link</a>
+        <button class="btn" onclick="navigator.clipboard.writeText('{{ link }}'); this.textContent='Copied!';">Copy Link</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ page_title or "NeonSpire Casino" }}</title>
+
+  <!-- App icons / favicon -->
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/logo.png') }}">
+  <meta name="theme-color" content="#0ae7d8" />
+
+  <!-- Consistent font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <!-- cache-bust CSS so users don’t keep stale assets -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}?v=dm2">
+
+  <style>
+    .brand {
+      display:flex;
+      gap:10px;
+      align-items:center;
+      text-decoration:none;
+      color:inherit;
+      font-weight:900;
+      font-size:22px;
+    }
+    .brand-logo {
+      height:30px;
+      width:auto;
+      display:block;
+      filter: drop-shadow(0 0 6px rgba(0,255,233,.45));
+    }
+    @media (max-width:480px){
+      .brand-text { font-size:18px; }
+    }
+
+    /* ===== Hero (banners) slot right under the nav ===== */
+    .hero-slot {
+      position:relative;
+      z-index:2;
+      padding-top:12px;
+    }
+    .hero-slot:empty { display:none; }
+
+    header.nav { overflow:visible; }
+  </style>
+</head>
+
+<body>
+  {% if system_status.busy %}
+<div style="
+    background: #fff3cd;
+    color: #856404;
+    padding: 14px;
+    text-align: center;
+    font-weight: 600;
+    border-bottom: 1px solid #ffeeba;
+    font-size: 15px;
+">
+    ⚠️ NeonSpire Casino is currently experiencing heavy traffic.  
+    Your actions may take a little longer than usual — please wait or refresh.
+</div>
+{% endif %}
+
+  <!-- Top Navigation -->
+  <header class="nav" style="position:sticky;top:0;z-index:50;background:rgba(0,0,0,.25);backdrop-filter:blur(8px);border-bottom:1px solid var(--stroke)">
+    <div class="shell nav-inner" style="display:flex;align-items:center;justify-content:space-between;height:58px">
+      <!-- Brand (logo + title) -->
+      <a href="{{ url_for('short_bp.lob_short') }}" class="brand" aria-label="NeonSpire Casino">
+        <img class="brand-logo" src="{{ url_for('static', filename='img/logo.png') }}" alt="NeonSpire Casino">
+        <span class="brand-text">NeonSpire Casino</span>
+      </a>
+
+      <!-- Right side -->
+      <nav class="nav-links" style="display:flex;align-items:center;gap:10px">
+        {% if not current_user.is_authenticated or current_user.role == 'PLAYER' %}
+          <a class="pill" href="{{ url_for('short_bp.lob_short') }}">Lobby</a>
+        {% endif %}
+
+        {% if current_user.is_authenticated %}
+          {% if current_user.role == 'ADMIN' %}
+            <a class="pill" href="{{ url_for('adminbp.admin_home') }}">Admin</a>
+            <a class="pill" href="{{ url_for('adminbp.admin_players') }}">Players</a>
+            <a class="pill" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
+            <a class="pill" href="{{ url_for('adminbp.admin_users') }}">Employees</a>
+          {% elif current_user.role == 'EMPLOYEE' %}
+            <a class="pill" href="{{ url_for('employeebp.employee_home') }}">Employee</a>
+          {% else %}
+            {# PLAYER nav: Lobby + My Logins (Support comes from widget include) #}
+            <a class="pill" href="{{ url_for('short_bp.mylogin_clean') }}">My Logins</a>
+            <a class="pill js-open-howto" href="#">How to Play</a>
+           
+
+
+
+		 {% endif %}
+
+          <a class="pill" href="{{ url_for('notifybp.list_notifications') }}">🔔 {{ unread_count or 0 }}</a>
+
+          <span class="pill" style="pointer-events:none;opacity:.85">
+            Hi, {{ current_user.name.split(' ')[0] if current_user.name else 'Player' }}
+          </span>
+
+          {# In Telegram mini-app we auto-login, so hide Logout button there #}
+          {% if not is_telegram %}
+            <a class="btn btn-ghost" href="{{ url_for('auth.logout') }}">Logout</a>
+          {% endif %}
+        {% else %}
+          {# In Telegram mini-app we auto-login, so hide Login/Register there #}
+          {% if not is_telegram %}
+            <a class="pill" href="{{ url_for('auth.login_get') }}">Login</a>
+            <a class="btn btn-primary" href="{{ url_for('short_bp.reg_short') }}">Register</a>
+          {% endif %}
+        {% endif %}
+
+        <!-- Dark mode toggle -->
+        <label class="toggle" style="margin-left:6px">
+          <input id="themeToggleTop" type="checkbox" />
+          <span class="track"><span class="knob"></span></span>
+          <span class="label">Dark</span>
+        </label>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Hero / banners directly under the nav -->
+  <div class="hero-slot">
+    {% block hero %}{% endblock %}
+  </div>
+
+  <!-- Main Shell -->
+  <main style="padding-bottom:20px">
+    <div class="shell" style="margin-top:12px">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="grid" style="display:grid;gap:8px">
+            {% for category, message in messages %}
+              <div class="panel" style="border-color:
+                {% if category == 'success' %}rgba(18,217,161,.55)
+                {% elif category in ['error','danger'] %}rgba(255,93,93,.6)
+                {% else %}var(--stroke){% endif %};
+              ">{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% if error %}
+        <div class="panel" style="border-color:rgba(255,93,93,.55)">
+          <div class="h3">⚠️ {{ error }}</div>
+          <div class="muted" style="margin-top:6px">
+            If this looks wrong, sign in with the correct role or contact support.
+          </div>
+        </div>
+      {% endif %}
+    </div>
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer -->
+  <footer class="shell footer"
+          style="height:68px;border-top:1px solid var(--stroke);margin-top:24px;
+                 display:flex;align-items:center;justify-content:center;">
+    © {{ 2025 }} NeonSpire Casino &nbsp;•&nbsp;
+    <span class="muted">©Gambling license from Curaçao </span>
+  </footer>
+  <!-- 🔹 NeonSpire "How to Play" Tutorial Modal -->
+  <div id="howToPlayModal"
+       aria-hidden="true"
+       style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+              z-index:10000;background:rgba(0,0,0,.65);backdrop-filter:blur(5px);">
+    <div style="background:#020617;color:#f9fafb;padding:22px 26px;border-radius:18px;
+                max-width:480px;width:90%;box-shadow:0 24px 70px rgba(0,0,0,.8);
+                border:1px solid rgba(148,163,184,.35);position:relative;">
+      <!-- Close icon -->
+      <button type="button"
+              id="htpClose"
+              aria-label="Close"
+              style="position:absolute;top:10px;right:10px;background:transparent;border:none;
+                     color:#9ca3af;font-size:18px;cursor:pointer;">
+        ✕
+      </button>
+
+      <!-- Step indicator -->
+      <div id="htpStepLabel"
+           style="margin-bottom:6px;font-size:12px;color:#9ca3af;">
+        Step 1 of 5
+      </div>
+
+      <!-- Title + body -->
+      <h3 id="htpTitle" style="margin:0 0 8px;font-size:18px;font-weight:700;">
+        Welcome to NeonSpire
+      </h3>
+      <p id="htpBody"
+         style="margin:0 0 16px;font-size:14px;line-height:1.6;opacity:.92;">
+        Choose a game and tap <b>Request ID</b>. Our system will create your game account
+        instantly and securely.
+      </p>
+
+      <!-- Progress dots -->
+      <div id="htpDots" style="display:flex;gap:6px;align-items:center;margin-bottom:14px;">
+        <!-- Filled by JS -->
+      </div>
+
+      <!-- Navigation buttons -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;">
+        <button type="button" class="btn btn-mini" id="htpPrev" disabled>
+          ◀ Back
+        </button>
+        <button type="button" class="btn btn-mini btn-primary" id="htpNext">
+          Next ▶
+        </button>
+      </div>
+
+      <!-- Footer note -->
+      <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;
+                  font-size:12px;color:#9ca3af;">
+        <button type="button"
+                id="htpSkip"
+                style="background:none;border:none;padding:0;color:#9ca3af;
+                       text-decoration:underline;cursor:pointer;">
+          Skip for now
+        </button>
+        <span>Premium Gaming. Real Automation. 🎰</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 🔹 NeonSpire "How to Play" – multi-step tutorial logic -->
+  <script>
+    (function () {
+      const modal   = document.getElementById('howToPlayModal');
+      if (!modal) return;
+
+      const titleEl = document.getElementById('htpTitle');
+      const bodyEl  = document.getElementById('htpBody');
+      const stepEl  = document.getElementById('htpStepLabel');
+      const dotsEl  = document.getElementById('htpDots');
+      const btnPrev = document.getElementById('htpPrev');
+      const btnNext = document.getElementById('htpNext');
+      const btnClose = document.getElementById('htpClose');
+      const btnSkip  = document.getElementById('htpSkip');
+
+      // Text for each step – tuned for NeonSpire flow
+      // Text for each step – two versions:
+// A) Guest players (not logged-in) → includes Register step
+// B) Logged-in players (web + Telegram) → no Register step
+
+const STEPS_GUEST = [
+  {
+    title: 'Create Your NeonSpire Account',
+    body: 'Tap <b>Register</b> on the top right and enter your <b>Name, Email, and Password</b>. After signing up, you will be redirected to the <b>Lobby</b>.'
+  },
+  {
+    title: 'Request Your Game ID',
+    body: 'Select a game and tap <b>Request ID</b>. Your game login is created <b>instantly</b> using secure automation.'
+  },
+  {
+    title: 'Download the Game App',
+    body: 'Tap <b>Download</b> under your game. Install the app on iOS, Android, or PC. Your login will appear in <b>My Logins</b>.'
+  },
+  {
+    title: 'Deposit Credits (Chime or Crypto)',
+    body: 'Go to <b>Add Credits → Deposit</b>. Choose <b>Chime</b> or <b>Crypto (USDT/BTC)</b>. Your credits load <b>instantly</b> after payment.'
+  },
+  {
+    title: 'Withdraw Your Winnings',
+    body: 'Check the withdrawal limits in the lobby. Enter correct <b>Chime</b> or <b>Crypto address</b>. Payment is processed <b>automatically</b>.'
+  },
+  {
+    title: '24/7 Support + Live Chat',
+    body: 'We provide <b>24/7 support</b> via Live Chat, WhatsApp, Telegram, Instagram, and Facebook.'
+  }
+];
+
+const STEPS_PLAYER = [
+  {
+    title: 'Request Your Game ID',
+    body: 'Select a game and tap <b>Request ID</b>. Your game login is created <b>instantly</b> using secure automation.'
+  },
+  {
+    title: 'Download the Game App',
+    body: 'Tap <b>Download</b> under your game. Install on iOS, Android, or PC. Your login appears in <b>My Logins</b>.'
+  },
+  {
+    title: 'Deposit Credits (Chime or Crypto)',
+    body: 'Go to <b>Add Credits → Deposit</b>. Choose Chime or Crypto. Credits load <b>instantly</b>.'
+  },
+  {
+    title: 'Withdraw Your Winnings',
+    body: 'Enter correct Chime or Crypto details. Redemption + payout is <b>automatic</b>.'
+  },
+  {
+    title: '24/7 Support + Live Chat',
+    body: 'NeonSpire provides <b>24/7 secure support</b> via Live Chat + social platforms.'
+  }
+];
+
+// Auto-select STEPS depending on login status:
+const STEPS = {{ current_user.is_authenticated | tojson }} ? STEPS_PLAYER : STEPS_GUEST;
+
+      let currentIndex = 0;
+      const TOTAL = STEPS.length;
+
+      function renderDots() {
+        if (!dotsEl) return;
+        dotsEl.innerHTML = '';
+        for (let i = 0; i < TOTAL; i++) {
+          const dot = document.createElement('div');
+          dot.style.width = '8px';
+          dot.style.height = '8px';
+          dot.style.borderRadius = '999px';
+          dot.style.background = i === currentIndex ? '#22c55e' : 'rgba(148,163,184,.5)';
+          dotsEl.appendChild(dot);
+        }
+      }
+
+      function renderStep() {
+        const step = STEPS[currentIndex];
+        if (titleEl) titleEl.textContent = step.title;
+        if (bodyEl) bodyEl.innerHTML = step.body;
+        if (stepEl) stepEl.textContent = `Step ${currentIndex + 1} of ${TOTAL}`;
+
+        if (btnPrev) btnPrev.disabled = (currentIndex === 0);
+        if (btnNext) {
+          btnNext.textContent = (currentIndex === TOTAL - 1)
+            ? 'Got it, start playing'
+            : 'Next ▶';
+        }
+
+        renderDots();
+      }
+
+      function openModal(auto) {
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        currentIndex = 0;
+        renderStep();
+
+        if (auto) {
+          try { localStorage.setItem('neonspire_htp_seen', '1'); } catch (_) {}
+        }
+      }
+
+      function closeModal() {
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
+        try { localStorage.setItem('neonspire_htp_seen', '1'); } catch (_) {}
+      }
+
+      if (btnPrev) {
+        btnPrev.addEventListener('click', function () {
+          if (currentIndex > 0) {
+            currentIndex -= 1;
+            renderStep();
+          }
+        });
+      }
+
+      if (btnNext) {
+        btnNext.addEventListener('click', function () {
+          if (currentIndex < TOTAL - 1) {
+            currentIndex += 1;
+            renderStep();
+          } else {
+            closeModal();
+          }
+        });
+      }
+
+      if (btnClose) btnClose.addEventListener('click', closeModal);
+      if (btnSkip)  btnSkip.addEventListener('click', closeModal);
+
+      modal.addEventListener('click', function (e) {
+        if (e.target === modal) {
+          closeModal();
+        }
+      });
+
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && modal.style.display === 'flex') {
+          closeModal();
+        }
+      });
+
+      // Bind all "How to Play" triggers
+      const triggers = document.querySelectorAll('.js-open-howto');
+      triggers.forEach(btn => {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          openModal(false);
+        });
+      });
+
+      // Optional: Auto-open once for logged-in web players (not Telegram)
+      {% if not is_telegram %}
+      document.addEventListener('DOMContentLoaded', function () {
+        try {
+          const seen = localStorage.getItem('neonspire_htp_seen');
+          if (!seen) {
+            setTimeout(function () { openModal(true); }, 1200);
+          }
+        } catch (_) {}
+      });
+      {% endif %}
+
+      // Global helper if you ever want to trigger manually
+      window.openHowToPlay = function () { openModal(false); };
+    })();
+  </script>
+
+  <!-- Theme toggle -->
+  <script>
+    (function(){
+      const KEY = 'theme';
+      const root = document.documentElement;
+      const saved = localStorage.getItem(KEY);
+      if (saved === 'light') {
+        root.dataset.theme = 'light';
+      }
+      const t = document.getElementById('themeToggleTop');
+      if (t) {
+        t.checked = root.dataset.theme !== 'light';
+        t.addEventListener('change', () => {
+          root.dataset.theme = t.checked ? 'dark' : 'light';
+          localStorage.setItem(KEY, root.dataset.theme);
+        });
+      }
+    })();
+  </script>
+
+  {# === Telegram WebApp auto-login (only runs inside Telegram mini app) === #}
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    (function () {
+      if (typeof Telegram === "undefined" || !Telegram.WebApp || !Telegram.WebApp.initDataUnsafe) {
+        return; // normal browser, do nothing
+      }
+
+      const unsafe = Telegram.WebApp.initDataUnsafe || {};
+      const user = unsafe.user;
+      if (!user) return;
+
+      // mark this session as Telegram for the server
+      document.cookie = "is_telegram=1; path=/";
+
+      // if we already did auto-login in this webview, skip
+      if (document.cookie.indexOf("tg_authed=1") !== -1) {
+        return;
+      }
+
+      fetch("/tg/autologin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: Telegram.WebApp.initData })
+      })
+      .then(r => r.json())
+      .then(function (data) {
+        if (data && data.ok) {
+          document.cookie = "tg_authed=1; path=/";
+          if (data.redirect) {
+            window.location.href = data.redirect;
+          } else {
+            window.location.reload();
+          }
+        } else {
+          console.log("tg_autologin failed", data);
+        }
+      })
+      .catch(function (err) {
+        console.log("tg_autologin error", err);
+      });
+    })();
+  </script>
+
+  {# ========= LIVE SUPPORT WIDGET (old working one) ========= #}
+  {% if current_user.is_authenticated
+        and (current_user.role or '') == 'PLAYER'
+        and not is_telegram %}
+    {# This partial contains the floating button + popup + JS that already works #}
+    {% include "_dm_widget.html" %}
+  {% endif %}
+
+  <!-- cache-bust JS -->
+  <script src="{{ url_for('static', filename='js/main.js') }}?v=dm2"></script>
+</body>
+</html>
+

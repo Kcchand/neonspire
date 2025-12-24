@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% set gmap = games or {} %}
+{% set umap = users or {} %}
+
+{% block content %}
+<div class="shell" style="margin-top:14px">
+
+  <!-- Header -->
+  <div class="panel">
+    <div class="section-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div class="section-title">
+        {% if selected_game %}
+          Open Game Access Requests • <span class="muted">{{ selected_game.name }}</span>
+        {% else %}
+          Open Game Access Requests
+        {% endif %}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        {% if selected_game %}
+          {% set be_top = (backend_urls[selected_game.id] if backend_urls is defined else None) %}
+          {% if be_top %}
+            <a class="btn btn-mini btn-ghost" href="{{ url_for('employeebp.open_game_backend', game_id=selected_game.id) }}" target="_blank">Open Backend</a>
+          {% endif %}
+          <a class="btn btn-mini" href="{{ url_for('employeebp.requests_list') }}">Show all games</a>
+        {% endif %}
+        <a class="btn btn-mini" href="{{ url_for('employeebp.employee_home') }}">Back to Dashboard</a>
+      </div>
+    </div>
+
+    {% if open_reqs and open_reqs|length %}
+      <div class="table">
+        <div class="t-head">
+          <div>Player</div>
+          <div>Game</div>
+          <div>Provide Credentials</div>
+          <div class="t-right">Actions</div>
+        </div>
+
+        {% for r in open_reqs %}
+          {% set u = umap.get(r.user_id) %}
+          {% set g = gmap.get(r.game_id) %}
+          {% set be = (backend_urls.get(r.game_id) if backend_urls is defined else (g.backend_url if g and g.backend_url else None)) %}
+          {% set refc = (refcodes.get(r.user_id) if refcodes is defined else None) %}
+
+          <div class="t-row">
+            <!-- Player -->
+            <div>
+              <div style="font-weight:700">
+                {% if u %}
+                  {{ u.name if u.name else u.email }}
+                {% else %}
+                  Player #{{ r.user_id }}
+                {% endif %}
+              </div>
+              <div class="muted" style="font-size:12px">
+                Req #{{ r.id }}{% if r.created_at %} • {{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+              </div>
+              {% if refc %}
+                <div class="muted" style="font-size:12px">Referral: <span class="mono">{{ refc }}</span></div>
+              {% endif %}
+            </div>
+
+            <!-- Game + quick links -->
+            <div>
+              <div style="font-weight:700">{{ g.name if g else ('#' ~ r.game_id) }}</div>
+              <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+                {% if g %}
+                  <a class="btn btn-mini" href="{{ url_for('employeebp.requests_list_by_game', game_id=g.id) }}">Only this game</a>
+                  {% if be %}
+                    <a class="btn btn-mini btn-ghost" href="{{ url_for('employeebp.open_game_backend', game_id=g.id) }}" target="_blank">Open Backend</a>
+                  {% else %}
+                    <button class="btn btn-mini btn-ghost" disabled>No Backend</button>
+                  {% endif %}
+                {% endif %}
+              </div>
+            </div>
+
+            <!-- Provide credentials -->
+            <div>
+              <form method="post" action="{{ url_for('employeebp.requests_provide', req_id=r.id) }}"
+                    class="form-grid" style="grid-template-columns:1fr 1fr 1fr; gap:8px">
+                <input name="username" type="text" placeholder="username / id" required>
+                <input name="password" type="text" placeholder="password / pin" required>
+                <input name="note"     type="text" placeholder="note (optional)">
+            </div>
+
+            <!-- Actions -->
+            <div class="t-right" style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+              <!-- Save (mark IN_PROGRESS) -->
+              <button class="btn btn-mini" name="action" value="save" type="submit">Save</button>
+              <!-- Save & Approve -->
+              <button class="btn btn-mini btn-primary" name="action" value="approve" type="submit">Save &amp; Approve</button>
+              </form>
+
+              <!-- Reject -->
+              <form method="post" action="{{ url_for('employeebp.requests_reject', req_id=r.id) }}" style="display:flex;gap:8px">
+                <input class="input" name="reason" placeholder="reason (optional)" style="min-width:160px">
+                <button class="btn btn-mini btn-ghost" type="submit">Reject</button>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty">No open requests.</div>
+    {% endif %}
+  </div>
+
+  <!-- Recently Approved -->
+  <div class="panel">
+    <div class="section-head">
+      <div class="section-title">
+        {% if selected_game %}
+          Recently Approved • <span class="muted">{{ selected_game.name }}</span>
+        {% else %}
+          Recently Approved
+        {% endif %}
+      </div>
+    </div>
+
+    {% if recent and recent|length %}
+      <div class="table">
+        <div class="t-head">
+          <div>Player</div>
+          <div>Game</div>
+          <div>Status</div>
+          <div>Date</div>
+        </div>
+        {% for r in recent %}
+          {% set u = umap.get(r.user_id) %}
+          {% set g = gmap.get(r.game_id) %}
+          {% set refc = (refcodes.get(r.user_id) if refcodes is defined else None) %}
+          <div class="t-row">
+            <div>
+              {{ (u.name or u.email or ('#' ~ r.user_id)) }}
+              {% if refc %}<div class="muted" style="font-size:12px">Ref: <span class="mono">{{ refc }}</span></div>{% endif %}
+            </div>
+            <div>{{ g.name if g else ('#' ~ r.game_id) }}</div>
+            <div>{{ r.status }}</div>
+            <div>{% if r.created_at %}{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty">Nothing approved yet.</div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  .tbl { width:100%; border-collapse:separate; border-spacing:0; }
+  .tbl th, .tbl td { padding:10px 12px; vertical-align:middle; }
+  .tbl thead th { text-align:left; font-weight:700; opacity:.9; position:sticky; top:0; background:rgba(0,0,0,.25); backdrop-filter:blur(6px); }
+  .tbl td.actions { text-align:right; white-space:nowrap; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  .pill { padding:2px 8px; border-radius:8px; border:1px solid var(--stroke); font-size:12px; }
+  .row.gap8 { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .table-wrap { max-height: 70vh; overflow:auto; border:1px solid var(--stroke); border-radius:12px; box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+  .h1 { margin: 4px 0 12px; }
+  .muted { opacity:.75; }
+
+  .badge { padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--stroke); }
+  .badge-ok { background:rgba(0,200,0,.08); }
+  .badge-warn { background:rgba(200,160,0,.08); }
+  .badge-err { background:rgba(200,0,0,.08); }
+
+  .btn[aria-busy="true"] { pointer-events:none; opacity:.7; }
+  .btn-success { background: #16a34a; border-color:#16a34a; color:white; }
+  .btn-error { background: #b91c1c; border-color:#b91c1c; color:white; }
+
+  @media (max-width: 768px){
+    .tbl thead { display:none; }
+    .table-wrap { max-height: none; overflow:visible; border:none; box-shadow:none; }
+    .tbl, .tbl tbody, .tbl tr, .tbl td { display:block; width:100%; }
+    .tbl tr {
+      background: rgba(255,255,255,.02);
+      border:1px solid var(--stroke);
+      border-radius:12px;
+      padding:10px;
+      margin-bottom:10px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.12);
+    }
+    .tbl td { padding:8px 10px; }
+    .tbl td.actions { text-align:left; }
+  }
+</style>
+
+<div class="card card-glass">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+    <h1 class="h1">Withdrawals</h1>
+    <div class="muted">
+      Pending: {{ (pending_rows|length) if pending_rows is defined else 0 }}
+      • Recent: {{ (recent_rows|length) if recent_rows is defined else 0 }}
+    </div>
+  </div>
+
+  <!-- =============== PENDING =============== -->
+  <h3 class="h3" style="margin-top:6px;">Pending</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Player</th>
+          <th>Game</th>
+          <th>Login</th>
+          <th>Amount</th>
+          <th>Wallet</th>
+          <th>Method</th>
+          <th>Requested</th>
+          <th class="actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in pending_rows %}
+          {% set w = r.wd %}
+          <tr id="row-{{ w.id }}">
+            <td class="mono">#{{ w.id }}</td>
+            <td>
+              <div>{{ r.user_name }}</div>
+              <div class="muted mono">{{ w.user_id }}</div>
+            </td>
+            <td>{{ r.game_name }}</td>
+            <td>
+              {% if r.login_user %}
+                <span class="pill mono" title="Login / ID">{{ r.login_user }}</span>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td class="mono">{{ w.amount }}</td>
+            <td class="mono">{{ r.wallet_balance }}</td>
+
+            <!-- METHOD + DETAILS (CHIME / CRYPTO etc.) -->
+              <td>
+                <div>{{ w.method }}</div>
+                {% if w.address %}
+                  <div class="muted mono" style="font-size:12px;">
+                    {% if w.method == 'CHIME' %}
+                      Chime handle: {{ w.address }}
+                    {% elif w.method == 'CRYPTO' %}
+                      Crypto wallet: {{ w.address }}
+                    {% else %}
+                      {{ w.address }}
+                    {% endif %}
+                  </div>
+                {% endif %}
+              </td>
+
+            <td class="mono">
+              {{ w.created_at.strftime('%Y-%m-%d %H:%M') if w.created_at }}
+            </td>
+            <td class="actions">
+              <div class="row gap8">
+                <!-- AJAX Redeem -->
+                <button class="btn js-redeem"
+                        data-id="{{ w.id }}"
+                        data-row="#row-{{ w.id }}">
+                  Redeem
+                </button>
+                <span id="status-{{ w.id }}" class="badge badge-warn">PENDING</span>
+
+                <form method="post"
+                      action="{{ url_for('employeebp.withdrawals_mark_paid', w_id=w.id) }}"
+                      style="display:flex;gap:8px;align-items:center;">
+                  <label class="muted">Tip</label>
+                  <input class="input mono"
+                         style="width:60px"
+                         name="tip_amount"
+                         type="number"
+                         step="1"
+                         min="0"
+                         value="0">
+                  <button class="btn btn-primary" type="submit">Mark Paid</button>
+                </form>
+
+                <form method="post"
+                      action="{{ url_for('employeebp.withdrawals_mark_reject', w_id=w.id) }}">
+                  <button class="btn btn-ghost" type="submit">Reject</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="9" class="muted">No pending withdrawals.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- =============== RECENT =============== -->
+  <h3 class="h3" style="margin-top:20px;">Recent (last 30)</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Player</th>
+          <th>Game</th>
+          <th>Login</th>
+          <th>Amount</th>
+          <th>Method</th>
+          <th>Status</th>
+          <th>Updated</th>
+          <th class="actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recent_rows %}
+          {% set w = r.wd %}
+          <tr id="row-{{ w.id }}">
+            <td class="mono">#{{ w.id }}</td>
+            <td>
+              <div>{{ r.user_name }}</div>
+              <div class="muted mono">{{ w.user_id }}</div>
+            </td>
+            <td>{{ r.game_name }}</td>
+            <td>
+              {% if r.login_user %}
+                <span class="pill mono" title="Login / ID">{{ r.login_user }}</span>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td class="mono">{{ w.amount }}</td>
+
+            <!-- METHOD + DETAILS for recent rows -->
+            <td>
+              <div>{{ w.method }}</div>
+              {% if w.address %}
+                <div class="muted mono" style="font-size:12px;">
+                  {% if w.method == 'CHIME' %}
+                    Chime handle: {{ w.address }}
+                  {% elif w.method == 'CRYPTO' %}
+                    Crypto wallet: {{ w.address }}
+                  {% else %}
+                    {{ w.address }}
+                  {% endif %}
+                </div>
+              {% endif %}
+            </td>
+
+            <td>
+              <span id="status-{{ w.id }}"
+                    class="badge
+                      {% if w.status in ['PAID','APPROVED'] %}badge-ok
+                      {% elif w.status in ['REJECTED'] %}badge-err
+                      {% else %}badge-warn{% endif %}">
+                {{ w.status }}
+              </span>
+            </td>
+            <td class="mono">
+              {{ (w.updated_at or w.created_at).strftime('%Y-%m-%d %H:%M')
+                 if (w.updated_at or w.created_at) }}
+            </td>
+            <td class="actions">
+              <div class="row gap8">
+                {% if w.status in ['PENDING','IN_PROGRESS'] %}
+                  <button class="btn js-redeem"
+                          data-id="{{ w.id }}"
+                          data-row="#row-{{ w.id }}">
+                    Redeem
+                  </button>
+                {% endif %}
+                {% if w.status != 'PAID' %}
+                  <form method="post"
+                        action="{{ url_for('employeebp.withdrawals_mark_paid', w_id=w.id) }}"
+                        style="display:flex;gap:8px;align-items:center;">
+                    <label class="muted">Tip</label>
+                    <input class="input mono"
+                           style="width:60px"
+                           name="tip_amount"
+                           type="number"
+                           step="1"
+                           min="0"
+                           value="0">
+                    <button class="btn btn-primary" type="submit">Mark Paid</button>
+                  </form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="9" class="muted">No recent items.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+/**
+ * AJAX Redeem:
+ * - Sets loading state on the clicked button
+ * - Calls /employee/withdrawals/<id>/redeem (expects JSON)
+ * - On success: button -> “Success”, status badge -> APPROVED, row dims
+ * - On failure: button -> “Failed”, re-enable & keep status
+ */
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".js-redeem");
+  if (!btn) return;
+
+  const id = btn.dataset.id;
+  const rowSel = btn.dataset.row || "#row-" + id;
+  const row = document.querySelector(rowSel);
+  const status = document.getElementById("status-" + id);
+
+  btn.setAttribute("aria-busy", "true");
+  const original = btn.textContent;
+  btn.textContent = "Loading…";
+
+  try {
+    const res = await fetch(`/employee/withdrawals/${id}/redeem`, {
+      method: "POST",
+      headers: { "X-Requested-With": "XMLHttpRequest" }
+    });
+    const j = await res.json().catch(() => ({}));
+
+    if (res.ok && j && j.ok) {
+      btn.textContent = "Success";
+      btn.classList.add("btn-success");
+      btn.removeAttribute("aria-busy");
+      btn.disabled = true;
+
+      if (status) {
+        status.textContent = "APPROVED";
+        status.classList.remove("badge-warn", "badge-err");
+        status.classList.add("badge-ok");
+      }
+      if (row) row.style.opacity = 0.7;
+    } else {
+      const msg = (j && (j.error || j.warning)) || `HTTP ${res.status}`;
+      btn.textContent = "Failed";
+      btn.classList.add("btn-error");
+      btn.removeAttribute("aria-busy");
+      btn.disabled = false;
+      console.error("Redeem failed:", msg);
+      alert("Redeem failed: " + msg);
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.classList.remove("btn-error");
+      }, 1600);
+    }
+  } catch (err) {
+    btn.textContent = "Error";
+    btn.classList.add("btn-error");
+    btn.removeAttribute("aria-busy");
+    btn.disabled = false;
+    console.error(err);
+    alert("Redeem error: " + (err && err.message || err));
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.classList.remove("btn-error");
+    }, 1600);
+  }
+});
+</script>
+
+{% endblock %}

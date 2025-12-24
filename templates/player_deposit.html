@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+  <div class="panel">
+    <div class="panel-head">
+      <div class="h3">Add Credits</div>
+      {% if settings and settings.bonus_percent %}
+        <span class="chip">🎁 Bonus +{{ settings.bonus_percent }}%</span>
+      {% endif %}
+    </div>
+
+    <form class="form-grid" method="post" action="{{ url_for('playerbp.deposit_post') }}">
+      <div class="form-group">
+        <label for="depGame">Target Game (optional)</label>
+        <select id="depGame" name="game_id" style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
+          <option value="">— Any / Wallet —</option>
+          {% for g in games %}
+            <option value="{{ g.id }}">{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="depAmount">Amount</label>
+        <input id="depAmount" name="amount" type="number" min="1" placeholder="Enter amount" required>
+      </div>
+
+      <div class="form-group">
+        <label for="depMethod">Method</label>
+        <select id="depMethod" name="method" style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
+          <option value="CRYPTO">Crypto</option>
+          <option value="CHIME">Chime</option>
+        </select>
+      </div>
+
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="proofUrl">Payment Proof (URL, optional)</label>
+        <input id="proofUrl" name="proof_url" type="url" placeholder="Paste a link to your payment proof (optional)">
+      </div>
+
+      <div class="form-actions" style="grid-column:1/-1;display:flex;gap:10px;justify-content:flex-end">
+        <a class="btn" href="{{ url_for('index') }}">Back</a>
+        <button class="btn btn-primary" type="submit">Deposit</button>
+      </div>
+    </form>
+
+    <div class="method-row" style="margin-top:14px">
+      <div class="method">
+        <div class="method-title">Crypto</div>
+        {% if settings and settings.crypto_wallet_text %}
+          <div class="muted">Wallet: {{ settings.crypto_wallet_text }}</div>
+        {% endif %}
+        {% if settings and settings.crypto_qr_url %}
+          <img class="qr" src="{{ settings.crypto_qr_url }}" alt="Crypto QR">
+        {% endif %}
+      </div>
+
+      <div class="method">
+        <div class="method-title">Chime</div>
+        {% if settings and settings.chime_handle %}
+          <div class="muted">Handle: {{ settings.chime_handle }}</div>
+        {% endif %}
+        {% if settings and settings.chime_qr_url %}
+          <img class="qr" src="{{ settings.chime_qr_url }}" alt="Chime QR">
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

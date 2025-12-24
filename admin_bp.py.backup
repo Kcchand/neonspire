@@ -1,0 +1,880 @@
+# admin_bp.py - COMPLETE WORKING VERSION
+import os
+import time
+from datetime import datetime, timedelta
+from werkzeug.utils import secure_filename
+from flask import (
+    Blueprint, render_template, render_template_string, request, redirect,
+    url_for, flash, abort, current_app, jsonify
+)
+from flask_login import login_required, current_user, logout_user
+from sqlalchemy import text, func, or_, and_
+from sqlalchemy import inspect as sqla_inspect
+
+from models import (
+    db,
+    User,
+    Game,
+    DepositRequest,
+    PaymentSettings,
+    PlayerBalance,
+    GameAccount,
+    GameAccountRequest,
+    WithdrawRequest,
+    ReferralCode,
+    Notification,
+    notify,
+    BonusSettings,
+)
+
+admin_bp = Blueprint("adminbp", __name__, url_prefix="/admin")
+
+# -------------------- Guards --------------------
+
+@admin_bp.before_request
+def require_admin():
+    """Check if user is authenticated and has ADMIN role."""
+    # Debug info
+    print(f"[DEBUG] require_admin - User authenticated: {current_user.is_authenticated}")
+    print(f"[DEBUG] require_admin - User role: {getattr(current_user, 'role', 'NO ROLE')}")
+    
+    if not current_user.is_authenticated:
+        print(f"[DEBUG] User not authenticated, redirecting to login")
+        # Don't use next parameter if already going to login
+        if not request.endpoint or 'login' not in request.endpoint:
+            return redirect(url_for("auth.login_get", next=request.url))
+        return
+    
+    user_role = (getattr(current_user, 'role', '') or "").upper()
+    if user_role != "ADMIN":
+        print(f"[DEBUG] User is not ADMIN (role: {user_role}), aborting 403")
+        logout_user()  # Clear invalid session
+        flash("Access denied. Admin privileges required.", "error")
+        return abort(403)
+    
+    print(f"[DEBUG] Admin access granted for {current_user.email}")
+
+# -------------------- Helpers -------------------
+
+def _uploads_dir() -> str:
+    """Ensure static/uploads exists and return the absolute path."""
+    updir = os.path.join(current_app.static_folder, "uploads")
+    os.makedirs(updir, exist_ok=True)
+    return updir
+
+def _save_image(file_storage, prefix: str) -> str | None:
+    """Save uploaded image and return URL."""
+    if not file_storage or not getattr(file_storage, "filename", ""):
+        return None
+    filename = secure_filename(file_storage.filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        flash("Only PNG/JPG/WEBP images are allowed.", "error")
+        return None
+
+    ts = int(time.time())
+    new_name = f"{prefix}_{ts}{ext}"
+    dest = os.path.join(_uploads_dir(), new_name)
+    file_storage.save(dest)
+    return url_for("static", filename=f"uploads/{new_name}")
+
+# ---------- KV Store ----------
+
+def _ensure_kv():
+    """Create key-value table if it doesn't exist."""
+    try:
+        bind = db.session.get_bind()
+        dialect = bind.dialect.name if bind else "sqlite"
+        if dialect in ("postgresql", "postgres"):
+            db.session.execute(text("""
+                CREATE TABLE IF NOT EXISTS kv_store (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """))
+        elif dialect in ("mysql", "mariadb"):
+            db.session.execute(text("""
+                CREATE TABLE IF NOT EXISTS kv_store (
+                    `key` VARCHAR(191) PRIMARY KEY,
+                    `value` TEXT
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+        else:
+            db.session.execute(text("""
+                CREATE TABLE IF NOT EXISTS kv_store (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+def _kv_set(k: str, v: str | None):
+    _ensure_kv()
+    v = v if v is not None else ""
+    try:
+        bind = db.session.get_bind()
+        dialect = bind.dialect.name if bind else "sqlite"
+        if dialect in ("postgresql", "postgres"):
+            db.session.execute(
+                text("INSERT INTO kv_store(key,value) VALUES(:k,:v) "
+                     "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value"),
+                {"k": k, "v": v}
+            )
+        elif dialect in ("mysql", "mariadb"):
+            db.session.execute(
+                text("INSERT INTO kv_store(`key`,`value`) VALUES(:k,:v) "
+                     "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)"),
+                {"k": k, "v": v}
+            )
+        else:
+            db.session.execute(
+                text("INSERT INTO kv_store(key,value) VALUES(:k,:v) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value"),
+                {"k": k, "v": v}
+            )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+def _kv_get(k: str) -> str | None:
+    _ensure_kv()
+    try:
+        row = db.session.execute(text("SELECT value FROM kv_store WHERE key=:k"), {"k": k}).fetchone()
+        return row[0] if row else None
+    except Exception:
+        db.session.rollback()
+        return None
+
+# ---------- PaymentSettings ----------
+
+def _get_settings() -> PaymentSettings:
+    s = db.session.get(PaymentSettings, 1)
+    if not s:
+        s = PaymentSettings(id=1, min_redeem=0, max_redeem=0)
+        db.session.add(s)
+        db.session.commit()
+    return s
+
+def _maybe_set(obj, attr: str, value):
+    if hasattr(obj, attr):
+        setattr(obj, attr, value)
+
+# -------------------- Bonus Helpers --------------------
+
+def _get_bonus_stats():
+    """Get bonus statistics."""
+    try:
+        # Get bonus settings
+        bonus_settings = BonusSettings.query.order_by(BonusSettings.updated_at.desc()).first()
+        if not bonus_settings:
+            bonus_settings = BonusSettings()
+            db.session.add(bonus_settings)
+            db.session.commit()
+        
+        # Get bonus summary
+        signup_bonus_used = User.query.filter_by(
+            role="PLAYER",
+            signup_bonus_claimed=True
+        ).count()
+        
+        total_players = User.query.filter_by(role="PLAYER").count()
+        eligible_signup = total_players - signup_bonus_used
+        
+        # Count players who have made at least one deposit
+        players_with_deposits = db.session.query(User.id).join(
+            DepositRequest, User.id == DepositRequest.user_id
+        ).filter(
+            User.role == "PLAYER",
+            DepositRequest.status.in_(["LOADED", "PAID"])
+        ).distinct().count()
+        
+        # Calculate available for regular bonus (players with deposits who have used signup bonus)
+        eligible_regular = players_with_deposits - signup_bonus_used
+        
+        return {
+            'signup_bonus_percent': bonus_settings.signup_percentage,
+            'regular_bonus_percent': bonus_settings.regular_percentage,
+            'signup_bonus_used': signup_bonus_used,
+            'eligible_signup': eligible_signup,
+            'eligible_regular': eligible_regular,
+            'total_players': total_players,
+            'players_with_deposits': players_with_deposits
+        }
+    except Exception:
+        return {
+            'signup_bonus_percent': 100,
+            'regular_bonus_percent': 50,
+            'signup_bonus_used': 0,
+            'eligible_signup': 0,
+            'eligible_regular': 0,
+            'total_players': 0,
+            'players_with_deposits': 0
+        }
+
+# -------------------- Admin Home --------------------
+
+@admin_bp.get("/")
+def admin_home():
+    """Admin dashboard - REMOVED @login_required decorator to avoid conflicts"""
+    print(f"[DEBUG] admin_home - User: {current_user.email if current_user.is_authenticated else 'Anonymous'}")
+    
+    s = _get_settings()
+
+    players_count = User.query.filter_by(role="PLAYER").count()
+    employees_count = User.query.filter_by(role="EMPLOYEE").count()
+    games_count = Game.query.count()
+    pending_deposits_count = DepositRequest.query.filter_by(status="PENDING").count()
+
+    employees = User.query.filter_by(role="EMPLOYEE").all()
+    games = Game.query.all()
+    pending_deposits = DepositRequest.query.filter_by(status="PENDING").order_by(DepositRequest.created_at.desc()).limit(50).all()
+
+    # Bonus statistics
+    bonus_stats = _get_bonus_stats()
+            
+    # Get current bonus settings for display
+    bonus_settings = BonusSettings.query.order_by(BonusSettings.updated_at.desc()).first()
+    if not bonus_settings:
+        bonus_settings = BonusSettings()
+        db.session.add(bonus_settings)
+        db.session.commit()
+    
+    # Calculate deposits by employee
+    dep_by_emp = {}
+    for emp in employees:
+        try:
+            # Count deposits loaded by this employee
+            if hasattr(DepositRequest, 'loaded_by'):
+                emp_deposits = DepositRequest.query.filter_by(
+                    loaded_by=emp.id, 
+                    status="LOADED"
+                ).count()
+            else:
+                emp_deposits = 0
+            
+            # Sum amounts for this employee
+            if hasattr(DepositRequest, 'loaded_by') and hasattr(DepositRequest, 'amount'):
+                total_amount = db.session.query(
+                    func.coalesce(func.sum(DepositRequest.amount), 0)
+                ).filter(
+                    DepositRequest.loaded_by == emp.id,
+                    DepositRequest.status == "LOADED"
+                ).scalar() or 0
+            else:
+                total_amount = 0
+            
+            dep_by_emp[emp.id] = {
+                'count': emp_deposits,
+                'sum': total_amount
+            }
+        except Exception:
+            dep_by_emp[emp.id] = {'count': 0, 'sum': 0}
+    
+    # Calculate IDs created by employee (GameAccount requests)
+    ids_by_emp = {}
+    for emp in employees:
+        try:
+            # Count game account requests created by this employee
+            ids_count = GameAccountRequest.query.filter_by(employee_id=emp.id).count()
+            ids_by_emp[emp.id] = ids_count
+        except Exception:
+            ids_by_emp[emp.id] = 0
+    
+    # Get latest game account requests
+    latest_ids = GameAccountRequest.query.order_by(
+        GameAccountRequest.created_at.desc()
+    ).limit(20).all()
+    
+    # Format latest IDs for display
+    formatted_latest_ids = []
+    for req in latest_ids:
+        player = User.query.get(req.user_id) if req.user_id else None
+        game = Game.query.get(req.game_id) if req.game_id else None
+        employee = User.query.get(req.employee_id) if req.employee_id else None
+        
+        formatted_latest_ids.append({
+            'player': player.name if player else f"User #{req.user_id}",
+            'game': game.name if game else f"Game #{req.game_id}",
+            'employee': employee.name if employee else "N/A",
+            'created_at': req.created_at
+        })
+
+    return render_template(
+        "dashboard_admin.html",
+        page_title="Admin Dashboard",
+        players_count=players_count,
+        employees_count=employees_count,
+        games_count=games_count,
+        pending_deposits_count=pending_deposits_count,
+        employees=employees,
+        games=games,
+        pending_deposits=pending_deposits,
+        settings=s,
+        bonus_stats=bonus_stats,
+        bonus_settings=bonus_settings,
+        dep_by_emp=dep_by_emp,
+        ids_by_emp=ids_by_emp,
+        latest_ids=formatted_latest_ids
+    )
+
+
+# -------------------- Settings (GET page) ---------------------
+
+@admin_bp.get("/settings")
+def settings_get():
+    s = _get_settings()
+    
+    # Get trending games list
+    trending_csv = getattr(s, "trending_game_ids", None) or _kv_get("trending_game_ids") or ""
+    trending_selected_ids = []
+    if trending_csv:
+        for token in str(trending_csv).split(","):
+            token = token.strip()
+            if token.isdigit():
+                trending_selected_ids.append(int(token))
+    
+    # Get current bonus settings
+    bonus_settings = BonusSettings.query.order_by(BonusSettings.updated_at.desc()).first()
+    if not bonus_settings:
+        bonus_settings = BonusSettings()
+        db.session.add(bonus_settings)
+        db.session.commit()
+
+    return render_template(
+        "admin_settings.html",
+        page_title="Settings",
+        settings=s,
+        bonus_settings=bonus_settings,
+        trending_selected_ids=trending_selected_ids
+    )
+
+# -------------------- Settings: QR / limits / socials ---------------------
+
+@admin_bp.post("/settings/crypto")
+def update_crypto_qr():
+    s = _get_settings()
+    s.crypto_wallet_text = (request.form.get("crypto_wallet_text") or "").strip()
+    crypto_pay_url = (request.form.get("crypto_pay_url") or "").strip()
+    _maybe_set(s, "crypto_pay_url", crypto_pay_url)
+    _kv_set("crypto_pay_url", crypto_pay_url)
+
+    qr_file = request.files.get("crypto_qr")
+    url = _save_image(qr_file, "crypto_qr")
+    if url:
+        s.crypto_qr_url = url
+
+    _maybe_set(s, "withdraw_crypto_address", (request.form.get("withdraw_crypto_address") or "").strip())
+    w_qr_file = request.files.get("withdraw_crypto_qr_file")
+    w_url = _save_image(w_qr_file, "withdraw_crypto_qr")
+    if w_url:
+        _maybe_set(s, "withdraw_crypto_qr_url", w_url)
+
+    db.session.commit()
+    flash("Crypto settings saved.", "success")
+    return redirect(url_for("adminbp.settings_get"))
+
+@admin_bp.post("/settings/chime")
+def update_chime_qr():
+    s = _get_settings()
+    s.chime_handle = (request.form.get("chime_handle") or "").strip()
+    chime_pay_url = (request.form.get("chime_pay_url") or "").strip()
+    _maybe_set(s, "chime_pay_url", chime_pay_url)
+    _kv_set("chime_pay_url", chime_pay_url)
+
+    qr_file = request.files.get("chime_qr")
+    url = _save_image(qr_file, "chime_qr")
+    if url:
+        s.chime_qr_url = url
+
+    _maybe_set(s, "withdraw_chime_handle", (request.form.get("withdraw_chime_handle") or "").strip())
+    w_chime_file = request.files.get("withdraw_chime_qr_file")
+    w_chime_url = _save_image(w_chime_file, "withdraw_chime_qr")
+    if w_chime_url:
+        _maybe_set(s, "withdraw_chime_qr_url", w_chime_url)
+
+    db.session.commit()
+    flash("Chime settings saved.", "success")
+    return redirect(url_for("adminbp.settings_get"))
+
+@admin_bp.post("/settings/limits")
+def update_limits():
+    s = _get_settings()
+    s.min_redeem = request.form.get("min_redeem", type=int) or 0
+    s.max_redeem = request.form.get("max_redeem", type=int) or 0
+    db.session.commit()
+    flash("Withdrawal limits updated.", "success")
+    return redirect(url_for("adminbp.settings_get"))
+
+# -------------------- Social Media Settings -------------------------------
+
+@admin_bp.post("/settings/social")
+def update_social():
+    s = _get_settings()
+    
+    s.whatsapp_url = (request.form.get("whatsapp_url") or "").strip()
+    s.telegram_url = (request.form.get("telegram_url") or "").strip()
+    s.facebook_url = (request.form.get("facebook_url") or "").strip()
+    s.instagram_url = (request.form.get("instagram_url") or "").strip()
+    
+    db.session.commit()
+    flash("Social media links updated.", "success")
+    return redirect(url_for("adminbp.settings_get"))
+
+# -------------------- Promotions Endpoint -------------------------------
+
+@admin_bp.post("/settings/promotions/update")
+def update_promotions():
+    s = _get_settings()
+
+    try:
+        # Get form data
+        promo_line1 = (request.form.get("promo_line1") or "").strip()
+        promo_line2 = (request.form.get("promo_line2") or "").strip()
+        ticker_bonus_percent = request.form.get("ticker_bonus_percent", type=int, default=0)
+
+        # Update settings
+        _maybe_set(s, "promo_line1", promo_line1)
+        _maybe_set(s, "promo_line2", promo_line2)
+        _maybe_set(s, "ticker_bonus_percent", ticker_bonus_percent)
+
+        # Save to kv_store for backup
+        _kv_set("promo_line1", promo_line1)
+        _kv_set("promo_line2", promo_line2)
+        _kv_set("ticker_bonus_percent", str(ticker_bonus_percent))
+
+        db.session.commit()
+        flash("Promotions updated successfully!", "success")
+        
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error updating promotions: {str(e)}", "error")
+    
+    return redirect(url_for("adminbp.settings_get"))
+
+# -------------------- Trending Games Endpoint -------------------------------
+
+@admin_bp.post("/settings/trending-games/update")
+def update_trending_games():
+    s = _get_settings()
+
+    try:
+        # Get selected games from checkboxes
+        trending_games = request.form.getlist("trending_games")
+        
+        # Convert to CSV string
+        csv_value = ",".join(trending_games) if trending_games else ""
+        
+        # Get optional note
+        trending_note = (request.form.get("trending_note") or "").strip()
+
+        # Update settings
+        _maybe_set(s, "trending_game_ids", csv_value)
+        _maybe_set(s, "trending_note", trending_note)
+
+        # Save to kv_store for backup
+        _kv_set("trending_game_ids", csv_value)
+        _kv_set("trending_note", trending_note)
+
+        db.session.commit()
+        flash("Trending games updated successfully!", "success")
+        
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error updating trending games: {str(e)}", "error")
+    
+    return redirect(url_for("adminbp.settings_get"))
+
+# -------------------- Alias for Trending (Fix for template compatibility) -------------------------------
+
+@admin_bp.post("/settings/trending/update")
+def update_trending():
+    """Alias for update_trending_games for template compatibility."""
+    return update_trending_games()
+
+# -------------------- Bonus Settings -------------------------------
+
+@admin_bp.post("/settings/bonus/update")
+def update_bonus_settings():
+    """Update bonus settings using the BonusSettings model."""
+    
+    try:
+        # Get current bonus settings
+        bonus_settings = BonusSettings.query.order_by(BonusSettings.updated_at.desc()).first()
+        if not bonus_settings:
+            bonus_settings = BonusSettings()
+            db.session.add(bonus_settings)
+            db.session.commit()
+        
+        # Sign-Up Bonus Settings
+        signup_active = 'signup_active' in request.form
+        signup_percentage = request.form.get("signup_percentage", type=int, default=100)
+        signup_max_amount = request.form.get("signup_max_amount", type=float, default=100.00)
+        signup_min_deposit = request.form.get("signup_min_deposit", type=float, default=20.00)
+        signup_wagering = request.form.get("signup_wagering", type=int, default=30)
+        
+        # Regular Bonus Settings
+        regular_active = 'regular_active' in request.form
+        regular_percentage = request.form.get("regular_percentage", type=int, default=50)
+        regular_max_amount = request.form.get("regular_max_amount", type=float, default=50.00)
+        regular_min_deposit = request.form.get("regular_min_deposit", type=float, default=10.00)
+        regular_wagering = request.form.get("regular_wagering", type=int, default=25)
+        
+        # Validate percentages
+        if signup_percentage < 0 or signup_percentage > 500:
+            flash("Sign-up bonus percentage must be between 0 and 500%.", "error")
+            return redirect(url_for("adminbp.settings_get"))
+            
+        if regular_percentage < 0 or regular_percentage > 500:
+            flash("Regular bonus percentage must be between 0 and 500%.", "error")
+            return redirect(url_for("adminbp.settings_get"))
+        
+        # Update Sign-Up Bonus settings
+        bonus_settings.signup_active = signup_active
+        bonus_settings.signup_percentage = signup_percentage
+        bonus_settings.signup_max_amount = signup_max_amount
+        bonus_settings.signup_min_deposit = signup_min_deposit
+        bonus_settings.signup_wagering = signup_wagering
+        
+        # Update Regular Bonus settings
+        bonus_settings.regular_active = regular_active
+        bonus_settings.regular_percentage = regular_percentage
+        bonus_settings.regular_max_amount = regular_max_amount
+        bonus_settings.regular_min_deposit = regular_min_deposit
+        bonus_settings.regular_wagering = regular_wagering
+        
+        bonus_settings.updated_by = current_user.id
+        bonus_settings.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        flash("Bonus settings updated successfully!", "success")
+        
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error updating bonus settings: {str(e)}", "error")
+    
+    return redirect(url_for("adminbp.settings_get"))
+
+# -------------------- News Update (Alias for template compatibility) -------------------------------
+
+@admin_bp.post("/settings/news/update")
+def update_news():
+    """Alias for update_promotions to fix template compatibility."""
+    return update_promotions()
+
+# -------------------- Employees ---------------------------
+
+@admin_bp.route("/users", methods=["GET", "POST"])
+def admin_users():
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        email = (request.form.get("email") or "").strip().lower()
+        password = request.form.get("password") or ""
+
+        if not name or not email or not password:
+            flash("All fields are required.", "error")
+            return redirect(url_for("adminbp.admin_users"))
+
+        if User.query.filter_by(email=email).first():
+            flash("Email already exists.", "error")
+            return redirect(url_for("adminbp.admin_users"))
+
+        u = User(name=name, email=email, role="EMPLOYEE")
+        if hasattr(u, "set_password"):
+            u.set_password(password)
+        else:
+            setattr(u, "password", password)
+        db.session.add(u)
+        db.session.commit()
+
+        flash("Employee created.", "success")
+        return redirect(url_for("adminbp.admin_users"))
+
+    employees = User.query.filter_by(role="EMPLOYEE").all()
+    return render_template("admin_users.html", employees=employees, page_title="Employees")
+
+@admin_bp.post("/users/<int:user_id>/disable")
+def admin_disable_employee(user_id: int):
+    u = db.session.get(User, user_id)
+    if not u or (u.role or "").upper() == "ADMIN":
+        flash("Invalid employee.", "error")
+        return redirect(url_for("adminbp.admin_users"))
+
+    if hasattr(u, "is_active"):
+        u.is_active = False
+    elif hasattr(u, "active"):
+        u.active = False
+    else:
+        u.role = "DISABLED"
+    db.session.commit()
+    flash(f"{u.name or u.email} has been disabled.", "success")
+    return redirect(url_for("adminbp.admin_users"))
+
+@admin_bp.post("/users/<int:user_id>/enable")
+def admin_enable_employee(user_id: int):
+    u = db.session.get(User, user_id)
+    if not u:
+        flash("User not found.", "error")
+        return redirect(url_for("adminbp.admin_users"))
+
+    if hasattr(u, "is_active"):
+        u.is_active = True
+    elif hasattr(u, "active"):
+        u.active = True
+    elif (u.role or "").upper() in ("DISABLED", ""):
+        u.role = "EMPLOYEE"
+    db.session.commit()
+    flash(f"{u.name or u.email} has been enabled.", "success")
+    return redirect(url_for("adminbp.admin_users"))
+
+# -------------------- Change Employee Password ---------------------------
+
+@admin_bp.post("/users/<int:user_id>/change-password")
+def admin_change_employee_password(user_id: int):
+    """Change employee password."""
+    u = db.session.get(User, user_id)
+    if not u or (u.role or "").upper() != "EMPLOYEE":
+        flash("Invalid employee.", "error")
+        return redirect(url_for("adminbp.admin_users"))
+
+    new_password = request.form.get("new_password", "").strip()
+    if not new_password:
+        flash("New password is required.", "error")
+        return redirect(url_for("adminbp.admin_users"))
+
+    if hasattr(u, "set_password"):
+        u.set_password(new_password)
+    else:
+        u.password = new_password
+
+    db.session.commit()
+    flash(f"Password changed for {u.name or u.email}.", "success")
+    return redirect(url_for("adminbp.admin_users"))
+
+# -------------------- Games Management -----------------
+
+@admin_bp.get("/games")
+def games_list():
+    games = Game.query.all()
+    return render_template("admin_games.html", page_title="Manage Games", games=games)
+
+@admin_bp.post("/games/create")
+def create_game():
+    name = (request.form.get("name") or "").strip()
+    description = (request.form.get("description") or "").strip()
+    download_url = (request.form.get("download_url") or "").strip()
+    icon_url = (request.form.get("icon_url") or "").strip()
+    is_active = bool(request.form.get("is_active"))
+    backend_url = (request.form.get("backend_url") or "").strip()
+
+    if not name:
+        flash("Game name is required.", "error")
+        return redirect(url_for("adminbp.games_list"))
+
+    icon_file = request.files.get("icon_file")
+    uploaded_icon = _save_image(icon_file, "game_icon")
+    if uploaded_icon:
+        icon_url = uploaded_icon or icon_url
+
+    g = Game(
+        name=name,
+        description=description or None,
+        download_url=download_url or None,
+        icon_url=icon_url or None,
+        is_active=is_active,
+    )
+
+    if hasattr(g, "backend_url"):
+        g.backend_url = backend_url or None
+
+    db.session.add(g)
+    db.session.commit()
+
+    _kv_set(f"game:{g.id}:backend_url", backend_url or "")
+
+    flash("Game created.", "success")
+    return redirect(url_for("adminbp.games_list"))
+
+@admin_bp.post("/games/<int:game_id>/edit")
+def edit_game_post(game_id: int):
+    g = db.session.get(Game, game_id)
+    if not g:
+        flash("Game not found.", "error")
+        return redirect(url_for("adminbp.games_list"))
+
+    g.name = (request.form.get("name") or g.name).strip()
+    g.description = (request.form.get("description") or "").strip() or None
+    g.download_url = (request.form.get("download_url") or "").strip() or None
+
+    backend_url = (request.form.get("backend_url") or "").strip() or None
+    if hasattr(g, "backend_url"):
+        g.backend_url = backend_url
+
+    icon_file = request.files.get("icon_file")
+    uploaded_icon = _save_image(icon_file, "game_icon")
+    if uploaded_icon:
+        g.icon_url = uploaded_icon
+    else:
+        url_from_text = (request.form.get("icon_url") or "").strip()
+        if url_from_text:
+            g.icon_url = url_from_text
+
+    g.is_active = "is_active" in request.form
+
+    db.session.commit()
+
+    _kv_set(f"game:{g.id}:backend_url", backend_url or "")
+
+    flash("Game updated.", "success")
+    return redirect(url_for("adminbp.games_list"))
+
+@admin_bp.get("/games/<int:game_id>/toggle")
+def toggle_game(game_id: int):
+    g = db.session.get(Game, game_id)
+    if not g:
+        flash("Game not found.", "error")
+        return redirect(url_for("adminbp.games_list"))
+    g.is_active = not bool(g.is_active)
+    db.session.commit()
+    flash(f"{g.name} is now {'Active' if g.is_active else 'Inactive'}.", "success")
+    return redirect(url_for("adminbp.games_list"))
+
+# -------------------- Delete Game --------------------
+
+@admin_bp.post("/games/<int:game_id>/delete")
+def delete_game(game_id):
+    game = Game.query.get_or_404(game_id)
+    
+    # Check if game is being used anywhere
+    from models import DepositRequest, WithdrawRequest, GameAccount, GameAccountRequest
+    
+    # Check deposits
+    if DepositRequest.query.filter_by(game_id=game_id).first():
+        flash(f"Cannot delete '{game.name}' - it has associated deposits.", "error")
+        return redirect(url_for("adminbp.games_list"))
+    
+    # Check withdrawals
+    if WithdrawRequest.query.filter_by(game_id=game_id).first():
+        flash(f"Cannot delete '{game.name}' - it has associated withdrawals.", "error")
+        return redirect(url_for("adminbp.games_list"))
+    
+    # Check game accounts
+    if GameAccount.query.filter_by(game_id=game_id).first():
+        flash(f"Cannot delete '{game.name}' - it has assigned game accounts.", "error")
+        return redirect(url_for("adminbp.games_list"))
+    
+    # Check game account requests
+    if GameAccountRequest.query.filter_by(game_id=game_id).first():
+        flash(f"Cannot delete '{game.name}' - it has pending requests.", "error")
+        return redirect(url_for("adminbp.games_list"))
+    
+    # Delete the game
+    game_name = game.name
+    db.session.delete(game)
+    db.session.commit()
+    
+    flash(f"Game '{game_name}' deleted successfully.", "success")
+    return redirect(url_for("adminbp.games_list"))
+
+# -------------------- Deposits Audit --------------------
+
+@admin_bp.get("/deposits")
+def deposits_audit():
+    pending = DepositRequest.query.filter_by(status="PENDING").order_by(DepositRequest.created_at.desc()).all()
+    recent = DepositRequest.query.filter(DepositRequest.status.in_(["LOADED", "PAID"])).order_by(DepositRequest.updated_at.desc()).limit(20).all()
+    return render_template("admin_deposits.html", page_title="Deposits", pending=pending, recent=recent)
+
+@admin_bp.post("/deposits/<int:dep_id>/<string:action>")
+def deposit_mark(dep_id: int, action: str):
+    dep = db.session.get(DepositRequest, dep_id)
+    if not dep:
+        flash("Deposit not found.", "error")
+        return redirect(url_for("adminbp.deposits_audit"))
+
+    action = (action or "").lower().strip()
+    if action not in ("loaded", "reject"):
+        flash("Invalid action.", "error")
+        return redirect(url_for("adminbp.deposits_audit"))
+
+    if action == "loaded":
+        dep.status = "LOADED"
+        dep.loaded_at = datetime.utcnow()
+        if hasattr(dep, "loaded_by"):
+            dep.loaded_by = current_user.id
+
+        if dep.amount and dep.user_id:
+            wallet = PlayerBalance.query.filter_by(user_id=dep.user_id).first()
+            if wallet:
+                wallet.balance = (wallet.balance or 0) + int(dep.amount or 0)
+
+        db.session.commit()
+
+        if dep.user_id:
+            notify(dep.user_id, f"✅ Your deposit #{dep.id} of {dep.amount} has been loaded.")
+        flash("Deposit marked as LOADED.", "success")
+    else:
+        dep.status = "REJECTED"
+        db.session.commit()
+        if dep.user_id:
+            notify(dep.user_id, f"⚠️ Your deposit #{dep.id} was rejected.")
+        flash("Deposit marked as REJECTED.", "success")
+
+    return redirect(url_for("adminbp.deposits_audit"))
+
+# -------------------- Players Management -------------------
+
+@admin_bp.get("/players")
+def admin_players():
+    players = User.query.filter_by(role="PLAYER").limit(200).all()
+    return render_template("admin_players.html", page_title="Players", players=players)
+
+@admin_bp.post("/players/<int:player_id>/delete")
+def delete_player(player_id: int):
+    u = db.session.get(User, player_id)
+    if not u or (u.role or "").upper() != "PLAYER":
+        flash("Player not found.", "error")
+        return redirect(url_for("adminbp.admin_players"))
+
+    try:
+        DepositRequest.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        WithdrawRequest.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        GameAccountRequest.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        GameAccount.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        PlayerBalance.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        ReferralCode.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+        Notification.query.filter_by(user_id=player_id).delete(synchronize_session=False)
+
+        db.session.delete(u)
+        db.session.commit()
+        flash("Player and all related data deleted.", "success")
+    except Exception:
+        db.session.rollback()
+        flash("Failed to delete player. See server logs.", "error")
+    return redirect(url_for("adminbp.admin_players"))
+
+# -------------------- Emergency Bypass Route --------------------
+# Use this ONLY for testing if you still have issues
+
+@admin_bp.get("/debug/auth")
+def debug_auth():
+    """Debug route to check authentication status"""
+    return jsonify({
+        "authenticated": current_user.is_authenticated,
+        "user_id": current_user.id if current_user.is_authenticated else None,
+        "email": current_user.email if current_user.is_authenticated else None,
+        "role": current_user.role if current_user.is_authenticated else None,
+        "session": dict(request.cookies)
+    })
+
+@admin_bp.get("/debug/login-as-admin")
+def debug_login_as_admin():
+    """EMERGENCY: Login as first admin user (for testing only - remove in production!)"""
+    admin_user = User.query.filter_by(role="ADMIN").first()
+    if not admin_user:
+        return "No admin user found", 404
+    
+    from flask_login import login_user
+    login_user(admin_user)
+    flash(f"Logged in as {admin_user.email} (ADMIN)", "success")
+    return redirect(url_for("adminbp.admin_home"))

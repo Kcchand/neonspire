@@ -1,0 +1,384 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>💸 Manual cash-out: enter totals below</span>
+    {% if settings %}
+      <span>🧮 Limits: min {{ settings.min_redeem or 0 }} • max {{ settings.max_redeem or 0 }}</span>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+  <div class="panel" style="position:relative" id="withdrawPanel">
+    <div class="panel-head">
+      <div class="h3">Request Withdrawal</div>
+      {% if settings %}
+        <div class="muted">Min: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>
+      {% endif %}
+    </div>
+
+    <!-- error banner (front-end validation) -->
+    <div id="wdError"
+         class="flash flash-error"
+         style="display:none;margin-bottom:10px;">
+    </div>
+
+    <!-- success banner (shown when status === PAID) -->
+<div id="wdSuccess"
+     style="display:none; position:absolute; inset:0;
+            background:rgba(5,8,12,.75); backdrop-filter:blur(2px);
+            z-index:200; align-items:center; justify-content:center;">
+  <div style="background:rgba(18,217,161,.15);
+              border:1px solid rgba(18,217,161,.45);
+              color:#12d9a1;
+              padding:20px 26px;
+              border-radius:16px;
+              font-weight:700;
+              font-size:16px;
+              text-align:center;
+              max-width:85%;
+              box-shadow:0 4px 14px rgba(0,0,0,0.4);">
+    🎉 Congratulations!<br>Your withdrawal was successfully paid.<br><br>
+    Please check your wallet to confirm the funds.
+    <br><br>
+
+    <!-- Go to Lobby button -->
+    <a href="{{ url_for('short_bp.lob_short') }}"
+       style="display:inline-block;margin-top:10px;
+              background:#12d9a1;color:#0a1712;
+              padding:10px 18px;font-size:15px;
+              font-weight:600;border-radius:10px;
+              text-decoration:none;">
+       Go to Lobby
+    </a>
+  </div>
+</div>
+    <!-- waiting banner (PENDING) -->
+    <div id="wdPending" style="display:none;margin-bottom:10px">
+      <div style="background:rgba(255,186,41,.12);border:1px solid rgba(255,186,41,.35);color:#ffba29;
+                  padding:8px 12px;border-radius:12px;font-weight:600;">
+        ⏳ Withdrawal submitted. Your payout is being processed…
+      </div>
+    </div>
+
+    <!-- overlay -->
+    <div id="withdrawLoading"
+         style="display:none;position:absolute;inset:0;background:rgba(5,8,12,.72);backdrop-filter:blur(1.2px);
+                z-index:60;align-items:center;justify-content:center;flex-direction:column;gap:10px;border-radius:16px;">
+      <div style="width:22px;height:22px;border:3px solid rgba(255,255,255,.15);border-top-color:#12d9a1;
+                  border-radius:9999px;animation:wdspin .6s linear infinite;"></div>
+      <div style="font-weight:600;font-size:14px;color:#fff" id="loaderText">
+        Please wait, your cash-out is being processed…
+      </div>
+      <div style="font-size:12px;color:#c5ccdd">Do not refresh this page.</div>
+    </div>
+
+    <form id="withdrawForm"
+    class="form-grid"
+    method="post"
+    action="{{ url_for('playerbp.withdraw_post') }}"
+    data-min-withdraw="{{ settings.min_redeem or 0 }}">
+      <div class="form-group">
+        <label for="wdGame">Game (optional)</label>
+        <select id="wdGame" name="game_id"
+                style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
+          <option value="">— No specific game —</option>
+          {% for g in games %}
+            <option value="{{ g.id }}" {% if preselect_game_id and preselect_game_id == g.id %}selected{% endif %}>
+              {{ g.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="wdMethod">Payout Method</label>
+        <select id="wdMethod" name="method"
+                style="background:var(--panel-2);border:1px solid var(--stroke);border-radius:12px;color:var(--text);padding:10px 12px">
+          <option value="CRYPTO">Crypto</option>
+          <option value="CHIME">Chime</option>
+        </select>
+      </div>
+
+      {# ---------- OUR OFFICIAL PAYOUT DETAILS (CRYPTO + CHIME) ---------- #}
+      <div class="form-group" id="cryptoInfo" style="grid-column:1/-1;display:block;">
+        <label>Our Crypto Payout Wallet</label>
+        <div style="display:flex;gap:16px;align-items:flex-start;
+                    background:var(--panel-2);border-radius:14px;padding:12px 14px;border:1px solid var(--stroke-soft);">
+          <div style="flex:1 1 auto;">
+            <div class="muted" style="font-size:13px;margin-bottom:6px;">
+              This is the official crypto wallet we use to send your withdrawals. Support may ask
+              you to confirm this address.
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input type="text"
+                     class="input"
+                     id="casinoCryptoAddress"
+                     value="{{ (settings.withdraw_crypto_address or settings.crypto_wallet_text) if settings else '' }}"
+                     readonly>
+              <button type="button"
+                      id="copyCryptoBtn"
+                      class="btn btn-ghost btn-sm">
+                Copy
+              </button>
+            </div>
+            <div class="muted" style="font-size:12px;margin-top:4px;">
+              Please double-check this address before saving it in your wallet or sharing it with anyone.
+            </div>
+          </div>
+          <div style="flex:0 0 auto;text-align:right;">
+            {% if settings and (settings.withdraw_crypto_qr_url or settings.crypto_qr_url) %}
+              <img src="{{ settings.withdraw_crypto_qr_url or settings.crypto_qr_url }}"
+                   alt="Crypto payout QR"
+                   style="max-height:110px;border-radius:10px;">
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group" id="chimeInfo" style="grid-column:1/-1;display:none;">
+        <label>Our Chime Payout Handle</label>
+        <div style="display:flex;gap:16px;align-items:flex-start;
+                    background:var(--panel-2);border-radius:14px;padding:12px 14px;border:1px solid var(--stroke-soft);">
+          <div style="flex:1 1 auto;">
+            <div class="muted" style="font-size:13px;margin-bottom:6px;">
+              This is the official Chime handle used to process withdrawals. Use this when requested by support.
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input type="text"
+                     class="input"
+                     id="casinoChimeHandle"
+                     value="{{ (settings.withdraw_chime_handle or settings.chime_handle) if settings else '' }}"
+                     readonly>
+              <button type="button"
+                      id="copyChimeBtn"
+                      class="btn btn-ghost btn-sm">
+                Copy
+              </button>
+            </div>
+            <div class="muted" style="font-size:12px;margin-top:4px;">
+              Only accept payout instructions that use this official handle.
+            </div>
+          </div>
+          <div style="flex:0 0 auto;text-align:right;">
+            {% if settings and (settings.withdraw_chime_qr_url or settings.chime_qr_url) %}
+              <img src="{{ settings.withdraw_chime_qr_url or settings.chime_qr_url }}"
+                   alt="Chime payout QR"
+                   style="max-height:110px;border-radius:10px;">
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {# ---------- END OFFICIAL PAYOUT DETAILS ---------- #}
+
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="wdAddress">Your Destination (wallet / handle)</label>
+        <input id="wdAddress" name="address" type="text"
+               placeholder="Your BTC/USDT wallet address or @chimehandle">
+        <div class="muted" style="font-size:12px;margin-top:4px;">
+          This is where your withdrawal will be sent. Make sure it belongs to you and is correct.
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="totalAmount">Total Amount</label>
+        <input id="totalAmount" name="total_amount" type="number" min="1" step="1" placeholder="e.g., 200" required>
+      </div>
+
+      <div class="form-group">
+        <label for="keepAmount">Keep in Game</label>
+        <input id="keepAmount" name="keep_amount" type="number" min="0" step="1" placeholder="e.g., 50">
+      </div>
+
+      <div class="form-group">
+        <label for="tipAmount">Tip for Employee</label>
+        <input id="tipAmount" name="tip_amount" type="number" min="0" step="1" placeholder="e.g., 10">
+      </div>
+
+      <div class="form-group">
+        <label for="cashOut">Cash Out (auto)</label>
+        <input id="cashOut" type="number" min="0" step="1" readonly placeholder="Calculated">
+      </div>
+
+      <input type="hidden" id="amountHidden" name="amount" value="">
+
+      <div class="form-actions" style="grid-column:1/-1;display:flex;gap:10px;justify-content:flex-end">
+        <a class="btn btn-ghost" href="{{ url_for('short_bp.lob_short') }}">Back</a>
+        <button id="wdSubmitBtn" class="btn btn-primary" type="submit">Submit Withdrawal</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+@keyframes wdspin { to { transform: rotate(360deg); } }
+</style>
+
+<script>
+(function () {
+  // preselect game from /withdraw/<id> or ?game_id=
+  const pre = {{ preselect_game_id if preselect_game_id is not none else 'null' }};
+  if (pre !== null) {
+    const sel = document.getElementById('wdGame');
+    if (sel) sel.value = String(pre);
+  } else {
+    const url = new URL(window.location.href);
+    const id = url.searchParams.get('game_id');
+    if (id) {
+      const sel = document.getElementById('wdGame');
+      if (sel) sel.value = id;
+    }
+  }
+
+  // ---------- toggle crypto/chime info + copy buttons ----------
+  const methodSel   = document.getElementById('wdMethod');
+  const cryptoInfo  = document.getElementById('cryptoInfo');
+  const chimeInfo   = document.getElementById('chimeInfo');
+  const copyCrypto  = document.getElementById('copyCryptoBtn');
+  const copyChime   = document.getElementById('copyChimeBtn');
+  const cryptoAddr  = document.getElementById('casinoCryptoAddress');
+  const chimeHandle = document.getElementById('casinoChimeHandle');
+
+  function updateMethodInfo() {
+    if (!methodSel) return;
+    const val = methodSel.value || 'CRYPTO';
+    if (cryptoInfo) cryptoInfo.style.display = (val === 'CRYPTO') ? 'block' : 'none';
+    if (chimeInfo)  chimeInfo.style.display  = (val === 'CHIME')  ? 'block' : 'none';
+  }
+  if (methodSel) {
+    methodSel.addEventListener('change', updateMethodInfo);
+    updateMethodInfo();
+  }
+
+  function copyToClipboard(el) {
+    if (!el || !el.value) return;
+    el.select();
+    el.setSelectionRange(0, 9999);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(el.value);
+    } else {
+      document.execCommand('copy');
+    }
+  }
+
+  if (copyCrypto && cryptoAddr) {
+    copyCrypto.addEventListener('click', () => copyToClipboard(cryptoAddr));
+  }
+  if (copyChime && chimeHandle) {
+    copyChime.addEventListener('click', () => copyToClipboard(chimeHandle));
+  }
+  // ---------- end toggle + copy ----------
+
+  const total   = document.getElementById('totalAmount');
+  const keep    = document.getElementById('keepAmount');
+  const tip     = document.getElementById('tipAmount');
+  const cashOut = document.getElementById('cashOut');
+  const hidden  = document.getElementById('amountHidden');
+
+  function asInt(el){ return Math.max(0, parseInt(el.value || '0', 10) || 0); }
+  function recalc(){
+    const t = asInt(total);
+    const k = asInt(keep);
+    const tp = asInt(tip);
+    let out = t - k - tp;
+    if(out < 0) out = 0;
+    cashOut.value = out;
+    hidden.value  = out;
+  }
+  [total, keep, tip].forEach(el => {
+    el.addEventListener('input', recalc);
+    el.addEventListener('change', recalc);
+  });
+  recalc();
+
+  const form    = document.getElementById('withdrawForm');
+  const overlay = document.getElementById('withdrawLoading');
+  const btn     = document.getElementById('wdSubmitBtn');
+  const pendBox = document.getElementById('wdPending');
+  const okBox   = document.getElementById('wdSuccess');
+  const loaderText = document.getElementById('loaderText');
+  const errBox  = document.getElementById('wdError');
+
+  function showError(msg) {
+    if (errBox) {
+      errBox.textContent = msg;
+      errBox.style.display = 'block';
+    } else {
+      alert(msg);
+    }
+  }
+
+  function clearError() {
+    if (errBox) {
+      errBox.textContent = '';
+      errBox.style.display = 'none';
+    }
+  }
+
+  // 🔁 poller
+  async function pollStatus(id) {
+    try {
+      const r = await fetch(`/player/withdraw/status/${id}`, {cache:'no-store'});
+      if (!r.ok) throw new Error();
+      const data = await r.json();
+      if (data.status === 'PAID' || data.status === 'APPROVED') {
+        if (overlay) overlay.style.display = 'none';
+        if (pendBox) pendBox.style.display = 'none';
+        if (okBox) okBox.style.display = 'flex';
+        return; // stop
+      }
+      // still pending → keep waiting
+      setTimeout(() => pollStatus(id), 5000);
+    } catch (e) {
+      // on error, try again later
+      setTimeout(() => pollStatus(id), 7000);
+    }
+  }
+
+  if (form) {
+    form.addEventListener('submit', async function (ev) {
+      ev.preventDefault(); // we'll ajax it
+      clearError();
+
+      // 🔒 NEW: front-end min cash-out validation
+      const minWithdraw = parseInt(form.dataset.minWithdraw || '0', 10);
+      const cashOutVal  = parseInt(cashOut.value || '0', 10);
+
+      if (minWithdraw > 0 && cashOutVal < minWithdraw) {
+        showError(`Sorry, you can’t cash out yet. Minimum cash-out is ${minWithdraw}.`);
+        return; // ❌ do not send request to backend
+      }
+
+      if (overlay) overlay.style.display = 'flex';
+      if (loaderText) loaderText.textContent = 'Submitting your withdrawal…';
+      if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+
+      const fd = new FormData(form);
+      try {
+        const resp = await fetch(form.action, {
+          method: 'POST',
+          body: fd
+        });
+        const data = await resp.json();   // route returns JSON
+
+        if (loaderText) loaderText.textContent = 'Your payout is being processed…';
+        if (pendBox) pendBox.style.display = '';
+
+        // begin polling
+        if (data.id) {
+          pollStatus(data.id);
+        }
+      } catch (e) {
+        if (overlay) overlay.style.display = 'none';
+        if (btn) { btn.disabled = false; btn.textContent = 'Submit Withdrawal'; }
+        alert('Could not submit withdrawal right now.');
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

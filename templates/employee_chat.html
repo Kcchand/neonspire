@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell" style="margin-top:14px">
+
+  <!-- Header -->
+  <div class="panel">
+    <div class="h3">Support Inbox</div>
+    <div class="muted">Private player ↔ staff chats. Click a row to open the conversation.</div>
+
+    <form method="get" action="{{ url_for('chat_bp.inbox') }}" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <input class="input" type="text" name="q" value="{{ q or '' }}" placeholder="Search name, email or user id"
+             style="min-width:260px;border:1px solid var(--stroke);border-radius:10px;padding:8px;background:var(--panel);color:var(--text)">
+      <button class="btn">Search</button>
+      <a class="btn btn-ghost" href="{{ url_for('chat_bp.inbox') }}">Clear</a>
+      <a class="btn btn-primary" href="{{ url_for('chat_bp.inbox') }}" style="margin-left:auto">Refresh</a>
+    </form>
+  </div>
+
+  <!-- Threads table -->
+  <div class="panel" style="padding:0">
+    <div style="display:grid;grid-template-columns: 1.6fr 1.2fr 120px 140px;gap:0;border-bottom:1px solid var(--stroke);padding:10px;font-weight:700">
+      <div>Player</div>
+      <div>Last Message</div>
+      <div>Assigned</div>
+      <div>Last Activity</div>
+    </div>
+
+    {% for row in threads_view %}
+      <a href="{{ url_for('chat_bp.room', thread_id=row.thread_id) }}"
+         style="display:grid;grid-template-columns: 1.6fr 1.2fr 120px 140px;gap:0;padding:10px;border-top:1px solid var(--stroke);text-decoration:none;color:inherit">
+        <div>
+          <div style="font-weight:700">{{ row.player_name }}</div>
+          <div class="muted" style="font-size:12px">{{ row.player_email }}</div>
+        </div>
+        <div class="muted" title="{{ row.last_msg_snippet }}">{{ row.last_msg_snippet }}</div>
+        <div class="muted">{% if row.assigned_staff_id %}#{{ row.assigned_staff_id }}{% else %}—{% endif %}</div>
+        <div class="muted">
+          {% if row.last_msg_at %}{{ row.last_msg_at.strftime('%b %d %H:%M') }}{% else %}—{% endif %}
+        </div>
+      </a>
+    {% else %}
+      <div style="padding:12px" class="muted">No open threads.</div>
+    {% endfor %}
+  </div>
+
+  <!-- Quick link to chat and queues -->
+  <div class="panel">
+    <div class="section-head">
+      <div class="section-title">Shortcuts</div>
+    </div>
+    <div class="chip-row">
+      <a class="chip" href="{{ url_for('employeebp.deposits_list') }}">💳 Review Deposits</a>
+      <a class="chip" href="{{ url_for('employeebp.requests_list') }}">🔐 Game Login Requests</a>
+      <a class="chip" href="{{ url_for('employeebp.withdrawals_list') }}">💸 Withdrawals</a>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,367 @@
+{% extends "base.html" %}
+
+{% block hero %}
+<div class="ticker">
+  <div class="shell ticker__track">
+    <span>💰 NeonSpire Casino Deposit — Choose amount & payment method</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="shell" style="margin-top:16px">
+  <div class="panel">
+    <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:16px">
+      <div>
+        <div class="h3">Choose Your Deposit</div>
+      </div>
+      <div class="muted" style="font-size:13px;text-align:right">
+        Secure payments • Instant balance credit after confirmation
+      </div>
+    </div>
+
+    <form id="depositStep1Form"
+          method="post"
+          action="{{ url_for('playerbp.deposit_step1_post') }}"
+          class="form-grid"
+          style="display:flex;flex-direction:column;gap:24px">
+
+      <!-- hidden fields actually sent to backend (amount in WHOLE DOLLARS) -->
+      <input type="hidden" name="amount" id="depAmountHidden" value="0">
+      <input type="hidden" name="method" id="depMethodHidden" value="">
+      <input type="hidden" name="game_id" value="{{ preselect_game_id or '' }}">
+
+      <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:stretch">
+        <!-- 1. Method column -->
+        <div style="flex:1 1 280px;min-width:260px">
+          <div class="h4" style="margin-bottom:8px">1. Choose a payment method</div>
+
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <!-- Crypto -->
+            <button
+              type="button"
+              class="btn pay-method-pill"
+              data-method="CRYPTO"
+              style="
+                display:flex;align-items:center;justify-content:flex-start;
+                gap:10px;
+                border-radius:18px;
+                padding:12px 16px;
+                background:var(--panel-2);
+                border:1px solid var(--stroke);
+                text-align:left;
+              "
+            >
+              <span style="
+                width:32px;height:32px;border-radius:999px;
+                display:flex;align-items:center;justify-content:center;
+                background:rgba(56,189,248,0.12);font-size:18px;
+              ">💎</span>
+              <div style="display:flex;flex-direction:column">
+                <span style="font-weight:600;">Crypto</span>
+                <span class="muted" style="font-size:12px;">Pay with USDT, BTC and more</span>
+              </div>
+            </button>
+
+            <!-- Chime -->
+            <button
+              type="button"
+              class="btn pay-method-pill"
+              data-method="CHIME"
+              style="
+                display:flex;align-items:center;justify-content:flex-start;
+                gap:10px;
+                border-radius:18px;
+                padding:12px 16px;
+                background:var(--panel-2);
+                border:1px solid var(--stroke);
+                text-align:left;
+              "
+            >
+              <span style="
+                width:32px;height:32px;border-radius:999px;
+                display:flex;align-items:center;justify-content:center;
+                background:rgba(74,222,128,0.12);font-size:18px;
+              ">🏦</span>
+              <div style="display:flex;flex-direction:column">
+                <span style="font-weight:600;">Chime</span>
+                <span class="muted" style="font-size:12px;">Pay with Chime balance</span>
+              </div>
+            </button>
+          </div>
+
+          <div id="methodHelp" class="muted" style="margin-top:12px;font-size:13px">
+            Please select a method above.
+          </div>
+        </div>
+
+        <!-- 2. Amount column -->
+        <div style="flex:1 1 320px;min-width:280px">
+          <div class="h4" style="margin-bottom:8px">2. Specify top up amount ($)</div>
+
+          <!-- Presets for CRYPTO -->
+          <div id="amountGroupCrypto" style="display:none;flex-direction:column;gap:10px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              {% for a in [11, 50, 100] %}
+              <button
+                type="button"
+                class="btn amount-pill"
+                data-method="CRYPTO"
+                data-amount-dollars="{{ a }}"
+                style="
+                  flex:1 1 80px;
+                  border-radius:999px;
+                  padding:10px 0;
+                  background:var(--panel-2);
+                  border:1px solid var(--stroke);
+                  text-align:center;
+                  font-weight:600;
+                "
+              >
+                ${{ a }}
+              </button>
+              {% endfor %}
+            </div>
+          </div>
+
+          <!-- Presets for CHIME -->
+          <div id="amountGroupChime" style="display:none;flex-direction:column;gap:10px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              {% for a in [5, 20, 50, 100] %}
+              <button
+                type="button"
+                class="btn amount-pill"
+                data-method="CHIME"
+                data-amount-dollars="{{ a }}"
+                style="
+                  flex:1 1 80px;
+                  border-radius:999px;
+                  padding:10px 0;
+                  background:var(--panel-2);
+                  border:1px solid var(--stroke);
+                  text-align:center;
+                  font-weight:600;
+                "
+              >
+                ${{ a }}
+              </button>
+              {% endfor %}
+            </div>
+          </div>
+
+          <!-- Other amount -->
+          <div style="margin-top:16px">
+            <div class="muted" style="font-size:13px;margin-bottom:4px">Other amount</div>
+            <input
+              id="amountInput"
+              type="text"
+              inputmode="decimal"
+              placeholder="Enter amount"
+              style="
+                width:100%;
+                max-width:260px;
+                background:var(--panel-2);
+                border:1px solid var(--stroke);
+                border-radius:999px;
+                padding:8px 12px;
+                color:var(--text);
+              "
+            >
+          </div>
+
+          <div id="minInfo" style="margin-top:8px;font-size:13px;color:#f97373">
+            <!-- dynamically filled by JS -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Remarks -->
+      <div class="form-group" style="margin-top:4px">
+        <label for="remarks">Remarks (optional)</label>
+        <input
+          id="remarks"
+          name="remarks"
+          type="text"
+          placeholder="Enter any note or reference for this deposit"
+          style="background:var(--panel-2);border:1px solid var(--stroke);
+                 border-radius:12px;color:var(--text);padding:10px 12px"
+        >
+        <small class="muted">If no payment link appears, please try again.</small>
+      </div>
+
+      <!-- Pay button + footnote -->
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:center;margin-top:4px">
+        <button
+          id="payNowBtn"
+          class="btn btn-primary"
+          type="submit"
+          disabled
+          style="opacity:.4;pointer-events:none;min-width:200px"
+        >
+          Pay
+        </button>
+        <div class="muted" style="font-size:13px;text-align:center">
+          You will be redirected to the payment page of the chosen service.
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  const hiddenAmount = document.getElementById("depAmountHidden"); // WHOLE dollars (string)
+  const hiddenMethod = document.getElementById("depMethodHidden");
+  const btnPay       = document.getElementById("payNowBtn");
+  const helpEl       = document.getElementById("methodHelp");
+  const minInfo      = document.getElementById("minInfo");
+  const amountInput  = document.getElementById("amountInput");
+
+  const methodBtns = Array.from(document.querySelectorAll(".pay-method-pill"));
+  const amountBtns = Array.from(document.querySelectorAll(".amount-pill"));
+
+  const amountGroupCrypto = document.getElementById("amountGroupCrypto");
+  const amountGroupChime  = document.getElementById("amountGroupChime");
+
+  // minimums in DOLLARS (adjust if you want)
+  const MIN_BY_METHOD = {
+    CRYPTO: 11,
+    CHIME:  5
+  };
+
+  function setMethod(method) {
+    hiddenMethod.value = method;
+
+    // toggle amount groups
+    amountGroupCrypto.style.display = (method === "CRYPTO" ? "flex" : "none");
+    amountGroupChime.style.display  = (method === "CHIME"  ? "flex" : "none");
+
+    // clear amount selection
+    hiddenAmount.value = "0";
+    amountInput.value  = "";
+    amountBtns.forEach(b => {
+      b.style.borderColor = "var(--stroke)";
+      b.style.background  = "var(--panel-2)";
+    });
+
+    updateTexts();
+    updatePayState();
+  }
+
+  function setAmountFromButton(btn) {
+    const dollars = parseFloat(btn.dataset.amountDollars || btn.getAttribute("data-amount-dollars") || "0");
+    if (!isNaN(dollars) && dollars > 0) {
+      // SEND PLAIN INTEGER DOLLARS (what your Python expects)
+      hiddenAmount.value = String(Math.round(dollars));
+      // still show 2 decimals in the visible input for UX
+      amountInput.value  = dollars.toFixed(2);
+
+      // active style
+      amountBtns.forEach(b => {
+        b.style.borderColor = "var(--stroke)";
+        b.style.background  = "var(--panel-2)";
+      });
+      btn.style.borderColor = "#f9e091";
+      btn.style.background  = "rgba(249,224,145,0.14)";
+    }
+    updatePayState();
+  }
+
+  function updateTexts() {
+    const method = hiddenMethod.value;
+    if (!method) {
+      helpEl.textContent = "Please select a method above.";
+      minInfo.textContent = "";
+      return;
+    }
+
+    const minDollars = MIN_BY_METHOD[method] || 0;
+    const label = method === "CRYPTO" ? "crypto" : "Chime";
+
+    if (method === "CRYPTO") {
+      helpEl.textContent = "Crypto: you’ll be redirected to our secure crypto checkout.";
+    } else {
+      helpEl.textContent = "Chime: you’ll see instructions to complete your payment.";
+    }
+
+    if (minDollars > 0) {
+      minInfo.textContent = `Minimum ${label} deposit is $${minDollars.toFixed(2)}.`;
+    } else {
+      minInfo.textContent = "";
+    }
+  }
+
+  function updatePayState() {
+    const method  = hiddenMethod.value;
+    const dollars = parseFloat(hiddenAmount.value || "0");
+    const minDollars = method ? (MIN_BY_METHOD[method] || 0) : 0;
+
+    const isValid = method && !isNaN(dollars) && dollars >= minDollars;
+
+    btnPay.disabled = !isValid;
+    btnPay.style.opacity = isValid ? "1" : ".4";
+    btnPay.style.pointerEvents = isValid ? "auto" : "none";
+  }
+
+  // --- Listeners ---
+
+  methodBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const m = (btn.dataset.method || "").toUpperCase();
+      methodBtns.forEach(b => {
+        b.style.borderColor = "var(--stroke)";
+        b.style.background  = "var(--panel-2)";
+      });
+      btn.style.borderColor = "#4ade80";
+      btn.style.background  = "rgba(74,222,128,0.18)";
+      setMethod(m);
+    });
+  });
+
+  amountBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const btnMethod     = (btn.dataset.method || "").toUpperCase();
+      const currentMethod = (hiddenMethod.value || "").toUpperCase();
+
+      // auto-switch method if needed
+      if (!currentMethod || currentMethod !== btnMethod) {
+        methodBtns
+          .filter(b => (b.dataset.method || "").toUpperCase() === btnMethod)
+          .forEach(b => {
+            methodBtns.forEach(x => {
+              x.style.borderColor = "var(--stroke)";
+              x.style.background  = "var(--panel-2)";
+            });
+            b.style.borderColor = "#4ade80";
+            b.style.background  = "rgba(74,222,128,0.18)";
+          });
+        setMethod(btnMethod);
+      }
+
+      setAmountFromButton(btn);
+    });
+  });
+
+  amountInput.addEventListener("input", () => {
+    const raw = amountInput.value.replace(/[^0-9.]/g, "");
+    const dollars = parseFloat(raw);
+    if (isNaN(dollars) || dollars <= 0) {
+      hiddenAmount.value = "0";
+    } else {
+      // again: INTEGER dollars string
+      hiddenAmount.value = String(Math.round(dollars));
+    }
+    // typing a custom amount clears preset highlight
+    amountBtns.forEach(b => {
+      b.style.borderColor = "var(--stroke)";
+      b.style.background  = "var(--panel-2)";
+    });
+    updatePayState();
+  });
+
+  // initial state
+  updateTexts();
+  updatePayState();
+})();
+</script>
+{% endblock %}

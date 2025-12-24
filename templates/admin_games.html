@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% set page_title = page_title or "Manage Games" %}
+
+{% block content %}
+<div class="shell">
+
+  <!-- Header + Back -->
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
+    <div class="h3">Manage Games</div>
+    <a class="btn btn-ghost" href="{{ url_for('adminbp.admin_home') }}">← Back to Admin</a>
+  </div>
+
+  <!-- Create New Game -->
+  <div class="panel">
+    <div class="h3" style="margin-bottom:10px">Add New Game</div>
+    <form method="post" action="{{ url_for('adminbp.create_game') }}" enctype="multipart/form-data">
+      <div style="display:grid;gap:12px;grid-template-columns:repeat(2,1fr)">
+
+        <label style="display:grid;gap:6px">
+          <span class="muted">Name *</span>
+          <input name="name" required placeholder="Awesome Slots"
+                 style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+        </label>
+
+        <label style="display:grid;gap:6px">
+          <span class="muted">Download URL</span>
+          <input name="download_url" placeholder="https://…"
+                 style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+        </label>
+
+        <label style="display:grid;gap:6px">
+          <span class="muted">Backend URL (for employees)</span>
+          <input name="backend_url" placeholder="https://…/admin or https://…/merchant"
+                 style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+        </label>
+
+        <label style="grid-column:1/-1;display:grid;gap:6px">
+          <span class="muted">Icon URL</span>
+          <input name="icon_url" placeholder="https://…/icon.png"
+                 style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+        </label>
+
+        <label style="grid-column:1/-1;display:grid;gap:6px">
+          <span class="muted">Or Upload Icon (PNG/JPG/WEBP)</span>
+          <input type="file" name="icon_file" accept=".png,.jpg,.jpeg,.webp"
+                 style="padding:8px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+        </label>
+
+        <label style="grid-column:1/-1;display:grid;gap:6px">
+          <span class="muted">Description</span>
+          <textarea name="description" rows="2" placeholder="Short promo copy…"
+                    style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)"></textarea>
+        </label>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+        <label style="display:flex;align-items:center;gap:8px">
+          <input type="checkbox" name="is_active" checked>
+          <span class="muted">Active</span>
+        </label>
+        <button class="btn btn-primary" type="submit">Create Game</button>
+      </div>
+    </form>
+  </div>
+
+  {% if games|length == 0 %}
+    <div class="panel">
+      <div class="muted">No games yet. Add one above.</div>
+    </div>
+  {% endif %}
+
+  <!-- Existing Games -->
+  <div class="game-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">
+    {% for g in games %}
+    <div class="game-card" style="border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+
+      <!-- Media -->
+      <div class="game-media" style="padding:10px;border-bottom:1px dashed var(--stroke);display:flex;align-items:center;gap:10px">
+        {% if g.icon_url %}
+          <img src="{{ g.icon_url }}" alt="{{ g.name }}" style="width:44px;height:44px;border-radius:10px;object-fit:cover">
+        {% else %}
+          <div class="media-fallback" style="width:44px;height:44px;border-radius:10px;background:#eee;display:flex;align-items:center;justify-content:center">🎮</div>
+        {% endif %}
+        <div>
+          <div class="game-title" title="{{ g.name }}" style="font-weight:700">{{ g.name }}</div>
+          <div class="game-sub" style="font-size:12px;opacity:.8">
+            {% if g.is_active %}Active{% else %}Inactive{% endif %}
+            {% if g.download_url %} • has download link{% endif %}
+            {% if g.backend_url %} • has backend{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Inline Edit (Save form only) -->
+      <div class="panel" style="margin:10px;border-radius:12px">
+        <div class="h3" style="margin-bottom:8px">Edit: {{ g.name }}</div>
+
+        <form method="post" action="{{ url_for('adminbp.edit_game_post', game_id=g.id) }}" enctype="multipart/form-data">
+          <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+
+            <label style="display:grid;gap:6px">
+              <span class="muted">Name</span>
+              <input name="name" value="{{ g.name }}"
+                     style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+            </label>
+
+            <label style="display:grid;gap:6px">
+              <span class="muted">Download URL</span>
+              <input name="download_url" value="{{ g.download_url or '' }}" placeholder="https://…"
+                     style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+            </label>
+
+            <label style="display:grid;gap:6px">
+              <span class="muted">Backend URL (for employees)</span>
+              <input name="backend_url" value="{{ g.backend_url or '' }}" placeholder="https://…/admin or https://…/merchant"
+                     style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+            </label>
+
+            <label style="grid-column:1/-1;display:grid;gap:6px">
+              <span class="muted">Icon URL</span>
+              <input name="icon_url" value="{{ g.icon_url or '' }}" placeholder="https://…/icon.png"
+                     style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+            </label>
+
+            <label style="grid-column:1/-1;display:grid;gap:6px">
+              <span class="muted">Or Upload New Icon (PNG/JPG/WEBP)</span>
+              <input type="file" name="icon_file" accept=".png,.jpg,.jpeg,.webp"
+                     style="padding:8px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">
+            </label>
+
+            <label style="grid-column:1/-1;display:grid;gap:6px">
+              <span class="muted">Description</span>
+              <textarea name="description" rows="3" placeholder="Short promo copy…"
+                        style="padding:10px;border-radius:10px;border:1px solid var(--stroke);background:var(--panel);color:var(--text)">{{ g.description or '' }}</textarea>
+            </label>
+          </div>
+
+          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+            <button class="btn btn-primary" type="submit">Save</button>
+            <a class="btn btn-ghost" href="{{ url_for('adminbp.admin_home') }}">Cancel</a>
+          </div>
+        </form>
+
+        <!-- Separate action row (not inside the form) -->
+        <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+          <a class="btn" href="{{ url_for('adminbp.toggle_game', game_id=g.id) }}">
+            {% if g.is_active %}Deactivate{% else %}Activate{% endif %}
+          </a>
+
+          {% if g.download_url %}
+            <a class="btn btn-ghost" target="_blank" href="{{ g.download_url }}">Open Link</a>
+          {% else %}
+            <button class="btn btn-ghost" disabled>Open Link</button>
+          {% endif %}
+
+          {% if g.backend_url %}
+            <a class="btn btn-ghost" target="_blank" href="{{ g.backend_url }}">Open Backend</a>
+          {% else %}
+            <button class="btn btn-ghost" disabled>Open Backend</button>
+          {% endif %}
+
+          <!-- FIXED: Simple form without escaped quotes -->
+          <form method="post" action="{{ url_for('adminbp.delete_game', game_id=g.id) }}" 
+                onsubmit="return confirm('Delete {{ g.name }}?');" style="display:inline;">
+            <button class="btn btn-ghost" style="border-color:rgba(255,93,93,.45)">Delete</button>
+          </form>
+        </div>
+      </div>
+      <!-- /Inline Edit -->
+
+    </div>
+    {% endfor %}
+  </div>
+
+</div>
+{% endblock %}

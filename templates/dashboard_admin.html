@@ -1,0 +1,392 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell admin-wrap" style="display:flex;flex-direction:column;gap:16px">
+
+  <!-- TOP BAR -->
+  <div class="panel admin-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <div class="admin-title" style="font-weight:800;font-size:22px">Admin Overview</div>
+    <div class="admin-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+      <a class="btn chip-btn" href="{{ url_for('adminbp.settings_get') }}">Settings</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.admin_users') }}">Employees</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.admin_players') }}">Players</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.games_list') }}">Games</a>
+      <a class="btn chip-btn" href="{{ url_for('auth.login_get') }}?next={{ url_for('employeebp.employee_home') }}">Staff Login Link</a>
+    </div>
+  </div>
+
+  <!-- METRICS -->
+  <div class="admin-metrics" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px">
+    <div class="panel card"><div class="metric-label">Players</div><div class="metric-value h3">{{ players_count or 0 }}</div></div>
+    <div class="panel card"><div class="metric-label">Employees</div><div class="metric-value h3">{{ employees_count or 0 }}</div></div>
+    <div class="panel card"><div class="metric-label">Games</div><div class="metric-value h3">{{ games_count or 0 }}</div></div>
+    <div class="panel card"><div class="metric-label">Pending Deposits</div><div class="metric-value h3">{{ pending_deposits_count or 0 }}</div></div>
+  </div>
+
+  <!-- PROMOTIONS / NEWS + TRENDING -->
+  <div class="admin-grid" style="display:grid;grid-template-columns:1.2fr .8fr;gap:12px">
+    <!-- Promotions / Ticker -->
+    <div class="panel card">
+      <div class="section-head">
+        <div class="section-title">Promotions / Ticker Text</div>
+        <div class="muted">Edit the lobby news lines and bonus percent.</div>
+      </div>
+      <form method="post" action="{{ url_for('adminbp.update_news') }}" class="form-grid">
+        <div class="form-group">
+          <label>Promo line 1</label>
+          <input id="promo1" name="promo_line1" type="text" placeholder="e.g., 🔥 Orion is hitting today" value="{{ settings.promo_line1 or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Promo line 2</label>
+          <input id="promo2" name="promo_line2" type="text" placeholder="e.g., 💎 +40% bonus on credit loads" value="{{ settings.promo_line2 or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Bonus percent (optional)</label>
+          <input id="bonus" name="bonus_percent" type="number" min="0" step="1" value="{{ settings.bonus_percent or 0 }}">
+        </div>
+        <div class="form-actions"><button class="btn btn-primary">Save Promotions</button></div>
+      </form>
+
+      <!-- Live Promo Ticker Preview -->
+      <div class="preview mt-3" style="border:1px dashed #ccc;border-radius:6px;overflow:hidden">
+        <div style="padding:6px 8px"><strong>Live Ticker Preview</strong></div>
+        <div class="ticker-wrap" style="position:relative;overflow:hidden;height:34px;background:#0f1115;color:#fff;border-top:1px dashed #333">
+          <div id="ticker" class="ticker" style="position:absolute;white-space:nowrap;animation:scroll-left 14s linear infinite;padding:6px 0">
+            <span id="promoPreview1">{{ settings.promo_line1 or 'Line 1…' }}</span>
+            <span style="padding:0 10px;opacity:.6">•</span>
+            <span id="promoPreview2">{{ settings.promo_line2 or 'Line 2…' }}</span>
+            <span style="padding:0 10px;opacity:.6">•</span>
+            <span id="promoPreviewBonus">Bonus: {{ settings.bonus_percent or 0 }}%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trending -->
+    <div class="panel card">
+      <div class="section-head">
+        <div class="section-title">Today's Trending</div>
+        <div class="muted">Pick games to highlight on the lobby.</div>
+      </div>
+      <form method="post" action="{{ url_for('adminbp.update_trending') }}" id="trendingForm">
+        <div class="grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:230px;overflow:auto;padding-right:6px">
+          {% for g in games %}
+          <label class="pill" style="display:flex;gap:8px;align-items:center">
+            {% set game_selected = false %}
+            {% if settings.trending_game_ids %}
+              {% set trending_ids = settings.trending_game_ids.split(',') %}
+              {% for id_str in trending_ids %}
+                {% if id_str.strip()|int == g.id %}
+                  {% set game_selected = true %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            <input type="checkbox" name="trending_ids" value="{{ g.id }}"
+                   {% if game_selected %}checked{% endif %}
+                   data-name="{{ g.name }}" data-icon="{{ g.icon_url or '' }}">
+            <span>{{ g.name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="form-group" style="margin-top:10px">
+          <label>Note (optional)</label>
+          <input name="trending_note" type="text" placeholder="Short note for internal use" value="{{ settings.trending_note or '' }}">
+        </div>
+        <div class="form-actions"><button class="btn btn-primary">Save Trending</button></div>
+      </form>
+
+      <!-- Live Trending Carousel Preview -->
+      <div class="preview mt-3" style="border:1px dashed #ccc;border-radius:6px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px">
+          <strong>Trending Preview</strong>
+          <div style="display:flex;gap:6px">
+            <button id="trendPrev" type="button" class="btn btn-mini btn-ghost" title="Scroll left">◀</button>
+            <button id="trendNext" type="button" class="btn btn-mini btn-ghost" title="Scroll right">▶</button>
+          </div>
+        </div>
+        <div id="trendingCarousel" style="display:flex;gap:10px;overflow-x:auto;scroll-behavior:smooth;padding:8px 8px 12px 8px;white-space:nowrap;border-top:1px dashed #ddd">
+          {% for g in games %}
+            {% if settings.trending_game_ids %}
+              {% set trending_ids = settings.trending_game_ids.split(',') %}
+              {% for id_str in trending_ids %}
+                {% if id_str.strip()|int == g.id %}
+                  <div class="trend-card" style="display:inline-flex;align-items:center;gap:8px;border:1px solid #e4e4e7;background:#fff;border-radius:8px;padding:6px 10px;min-width:max-content">
+                    {% if g.icon_url %}
+                      <img src="{{ g.icon_url }}" alt="{{ g.name }}" width="24" height="24" style="object-fit:cover;border-radius:6px">
+                    {% else %}
+                      <div style="width:24px;height:24px;border-radius:6px;background:#eee;display:flex;align-items:center;justify-content:center">🎮</div>
+                    {% endif %}
+                    <span style="font-weight:600">{{ g.name }}</span>
+                  </div>
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PENDING DEPOSITS -->
+  <div class="panel card">
+    <div class="section-head">
+      <div class="section-title">Pending Deposits</div>
+      <div class="muted">Approve or reject player payments.</div>
+    </div>
+
+    {% if pending_deposits and pending_deposits|length %}
+      <div class="table">
+        <div class="t-head">
+          <div>ID</div><div>Player</div><div>Amount</div><div>Method</div><div>Proof</div><div>When</div><div class="t-right">Action</div>
+        </div>
+        {% for d in pending_deposits %}
+        <div class="t-row">
+          <div>#{{ d.id }}</div>
+          <div class="muted">#{{ d.user_id }}</div>
+          <div>{{ d.amount }}</div>
+          <div>{{ d.method or '—' }}</div>
+          <div>{% if d.proof_url %}<a href="{{ d.proof_url }}" target="_blank">open</a>{% else %}<span class="muted">—</span>{% endif %}</div>
+          <div class="muted">{% if d.created_at %}{{ d.created_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}</div>
+          <div class="t-right" style="display:flex;gap:6px;justify-content:flex-end">
+            <form method="post" action="{{ url_for('adminbp.deposit_mark', dep_id=d.id, action='loaded') }}"><button class="btn btn-mini btn-primary">Approve</button></form>
+            <form method="post" action="{{ url_for('adminbp.deposit_mark', dep_id=d.id, action='reject') }}"><button class="btn btn-mini btn-ghost">Reject</button></form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty muted">No pending deposits.</div>
+    {% endif %}
+  </div>
+
+  <!-- MANAGE GAMES (inline editor) -->
+  <div class="panel card">
+    <div class="section-head">
+      <div class="section-title">Manage Games</div>
+      <div class="muted">Edit name/description/icon, upload new icon, toggle active, or delete.</div>
+    </div>
+
+    {% if games and games|length %}
+      <div class="table">
+        <div class="t-head">
+          <div>Icon</div><div style="min-width:160px">Name</div><div>Description</div><div>Download URL</div><div>Status</div><div class="t-right">Actions</div>
+        </div>
+
+        {% for g in games %}
+        <div class="t-row" style="align-items:center">
+          <div>
+            {% if g.icon_url %}
+              <img src="{{ g.icon_url }}" alt="{{ g.name }}" style="width:32px;height:32px;border-radius:6px;object-fit:cover">
+            {% else %}
+              <div style="width:32px;height:32px;border-radius:6px;background:#eee;display:flex;align-items:center;justify-content:center">🎮</div>
+            {% endif %}
+          </div>
+
+          <form method="post" action="{{ url_for('adminbp.edit_game_post', game_id=g.id) }}" enctype="multipart/form-data" style="display:contents">
+            <div><input name="name" type="text" value="{{ g.name }}" style="min-width:160px"></div>
+            <div><input name="description" type="text" value="{{ g.description or '' }}" placeholder="Short tagline"></div>
+            <div><input name="download_url" type="url" value="{{ g.download_url or '' }}" placeholder="https://…"></div>
+            <div class="muted">{{ 'Active' if g.is_active else 'Inactive' }}</div>
+            <div class="t-right" style="display:flex;gap:6px;justify-content:flex-end;align-items:center">
+              <input name="icon_url" type="url" placeholder="Icon URL" style="max-width:160px">
+              <input name="icon_file" type="file" accept=".png,.jpg,.jpeg,.webp" style="max-width:210px">
+              <button class="btn btn-mini">Save</button>
+            </div>
+          </form>
+
+          <div class="t-right" style="display:flex;gap:6px;justify-content:flex-end">
+            <form method="get" action="{{ url_for('adminbp.toggle_game', game_id=g.id) }}"><button class="btn btn-mini btn-ghost">Toggle</button></form>
+            <form method="post" action="{{ url_for('adminbp.delete_game', game_id=g.id) }}" onsubmit="return confirm('Delete this game?')"><button class="btn btn-mini btn-ghost">Delete</button></form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty muted">No games yet.</div>
+    {% endif %}
+  </div>
+
+  <!-- REPORTS -->
+  <div class="admin-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <!-- Employee Contributions -->
+    <div class="panel card">
+      <div class="section-head"><div class="section-title">Employee Contributions</div><div class="muted">Loaded deposits & IDs created.</div></div>
+      <div class="table">
+        <div class="t-head"><div>Employee</div><div>Deposits Loaded</div><div>Loaded Amount</div><div>IDs Created</div></div>
+        {% for emp in employees %}
+          {% set dep_bucket = dep_by_emp.get(emp.id, {'count':0,'sum':0}) %}
+          {% set ids_count = ids_by_emp.get(emp.id, 0) %}
+          <div class="t-row">
+            <div>{{ emp.name or emp.email }}</div>
+            <div>{{ dep_bucket.count }}</div>
+            <div>${{ dep_bucket.sum }}</div>
+            <div>{{ ids_count }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Players per Game (Placeholder - can be implemented later) -->
+    <div class="panel card">
+      <div class="section-head"><div class="section-title">Recent Activities</div><div class="muted">Latest system activities.</div></div>
+      <div class="empty muted">Activity log coming soon.</div>
+    </div>
+  </div>
+
+  <!-- Latest IDs -->
+  <div class="panel card">
+    <div class="section-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div class="section-title">Latest Player Logins Issued</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="idsSearch" type="text" placeholder="Search player / game / staff (⌘/Ctrl + K)"
+               style="padding:8px 10px;border:1px solid var(--stroke);border-radius:10px;min-width:260px">
+        <span id="idsCount" class="muted">—</span>
+        <button id="idsClear" type="button" class="btn btn-mini btn-ghost">Clear</button>
+      </div>
+    </div>
+
+    {% if latest_ids and latest_ids|length %}
+      <div class="table" style="max-height:320px;overflow:auto;border:1px dashed var(--stroke);border-radius:10px">
+        <div class="t-head" style="position:sticky;top:0;background:var(--panel);z-index:1">
+          <div>Player</div><div>Game</div><div>Issued By</div><div>When</div>
+        </div>
+        <div id="idsBody">
+          {% for r in latest_ids %}
+          <div class="t-row ids-row">
+            <div class="ids-player">{{ r.player }}</div>
+            <div class="ids-game">{{ r.game }}</div>
+            <div class="ids-employee">
+              {% if r.employee and r.employee|string and r.employee != 'N/A' %}
+                {{ r.employee }}
+              {% else %}
+                <span class="muted">N/A</span>
+              {% endif %}
+            </div>
+            <div class="muted">
+              {% if r.created_at %}{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% else %}
+      <div class="empty muted">No IDs issued yet.</div>
+    {% endif %}
+  </div>
+
+  <!-- BONUS STATISTICS -->
+  <div class="panel card">
+    <div class="section-head">
+      <div class="section-title">Bonus Statistics</div>
+      <div class="muted">Sign-up and regular bonus usage overview.</div>
+    </div>
+    <div class="admin-grid" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:10px">
+      <div class="panel card" style="background:#f0f9ff">
+        <div class="metric-label">Sign-Up Bonus</div>
+        <div class="metric-value h3">{{ bonus_stats.signup_bonus_percent }}%</div>
+        <div class="muted" style="font-size:12px">Used: {{ bonus_stats.signup_bonus_used }} / Eligible: {{ bonus_stats.eligible_signup }}</div>
+      </div>
+      <div class="panel card" style="background:#f0fff4">
+        <div class="metric-label">Regular Bonus</div>
+        <div class="metric-value h3">{{ bonus_stats.regular_bonus_percent }}%</div>
+        <div class="muted" style="font-size:12px">Eligible: {{ bonus_stats.eligible_regular }} players</div>
+      </div>
+      <div class="panel card" style="background:#faf5ff">
+        <div class="metric-label">Total Players</div>
+        <div class="metric-value h3">{{ bonus_stats.total_players }}</div>
+        <div class="muted" style="font-size:12px">With deposits: {{ bonus_stats.players_with_deposits }}</div>
+      </div>
+      <div class="panel card" style="background:#fff7ed">
+        <div class="metric-label">Bonus Settings</div>
+        <div class="metric-value" style="font-size:16px">
+          {% if bonus_settings.signup_active %}✓{% else %}✗{% endif %} Sign-Up
+          {% if bonus_settings.regular_active %}✓{% else %}✗{% endif %} Regular
+        </div>
+        <div class="muted" style="font-size:12px">
+          <a href="{{ url_for('adminbp.settings_get') }}#bonus">Edit</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Ticker animation -->
+<style>
+@keyframes scroll-left { 0% { transform: translateX(100%);} 100% { transform: translateX(-100%);} }
+</style>
+
+<!-- Live previews + IDs filter JS -->
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  // Promo live preview
+  const promo1 = document.getElementById("promo1");
+  const promo2 = document.getElementById("promo2");
+  const bonus  = document.getElementById("bonus");
+  if (promo1) promo1.addEventListener("input", () => document.getElementById("promoPreview1").textContent = promo1.value || "Line 1…");
+  if (promo2) promo2.addEventListener("input", () => document.getElementById("promoPreview2").textContent = promo2.value || "Line 2…");
+  if (bonus)  bonus.addEventListener("input",  () => document.getElementById("promoPreviewBonus").textContent = "Bonus: " + (bonus.value || 0) + "%");
+
+  // Trending carousel preview
+  const form = document.getElementById("trendingForm");
+  const carousel = document.getElementById("trendingCarousel");
+  function rebuildCarousel(){
+    if (!form || !carousel) return;
+    carousel.innerHTML = "";
+    form.querySelectorAll('input[name="trending_ids"]:checked').forEach(cb => {
+      const wrap = document.createElement("div");
+      wrap.className = "trend-card";
+      wrap.style = "display:inline-flex;align-items:center;gap:8px;border:1px solid #e4e4e7;background:#fff;border-radius:8px;padding:6px 10px;min-width:max-content";
+      const icon = cb.dataset.icon;
+      if (icon){
+        const img = document.createElement("img");
+        img.src = icon; img.width = 24; img.height = 24; img.style = "object-fit:cover;border-radius:6px";
+        wrap.appendChild(img);
+      } else {
+        const box = document.createElement("div");
+        box.textContent = "🎮";
+        box.style = "width:24px;height:24px;border-radius:6px;background:#eee;display:flex;align-items:center;justify-content:center";
+        wrap.appendChild(box);
+      }
+      const name = document.createElement("span");
+      name.style.fontWeight = "600";
+      name.textContent = cb.dataset.name;
+      wrap.appendChild(name);
+      carousel.appendChild(wrap);
+    });
+  }
+  if (form){
+    form.querySelectorAll('input[name="trending_ids"]').forEach(cb => cb.addEventListener("change", rebuildCarousel));
+  }
+  const btnPrev = document.getElementById("trendPrev");
+  const btnNext = document.getElementById("trendNext");
+  const step = 240;
+  if (btnPrev && carousel) btnPrev.addEventListener("click", () => carousel.scrollLeft -= step);
+  if (btnNext && carousel) btnNext.addEventListener("click", () => carousel.scrollLeft += step);
+
+  // Latest IDs: search/filter
+  const q = document.getElementById("idsSearch");
+  const clearBtn = document.getElementById("idsClear");
+  const body = document.getElementById("idsBody");
+  const count = document.getElementById("idsCount");
+  if (q && body && count){
+    const rows = Array.from(body.querySelectorAll(".ids-row"));
+    function apply(){
+      const term = q.value.trim().toLowerCase(); let visible = 0;
+      rows.forEach(r => {
+        const show = !term || r.textContent.toLowerCase().includes(term);
+        r.style.display = show ? "" : "none"; if (show) visible++;
+      });
+      count.textContent = visible + " / " + rows.length;
+    }
+    q.addEventListener("input", apply);
+    clearBtn.addEventListener("click", () => { q.value=""; apply(); q.focus(); });
+    document.addEventListener("keydown", e => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==="k"){ e.preventDefault(); q.focus(); q.select(); }
+    });
+    apply();
+  }
+});
+</script>
+{% endblock %}

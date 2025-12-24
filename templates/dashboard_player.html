@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+
+{% block hero %}
+{# ===== THREE STATIC BANNERS (no live news) ===== #}
+{% set b1t = (banner1_text if banner1_text is defined and banner1_text else (settings.banner1_text if settings and settings.banner1_text else '')) %}
+{% set b2t = (banner2_text if banner2_text is defined and banner2_text else (settings.banner2_text if settings and settings.banner2_text else '')) %}
+{% set b3t = (banner3_text if banner3_text is defined and banner3_text else (settings.banner3_text if settings and settings.banner3_text else '')) %}
+
+{% set b1bg = (banner1_bg if banner1_bg is defined and banner1_bg else (settings.banner1_bg if settings and settings.banner1_bg else '#121419')) %}
+{% set b2bg = (banner2_bg if banner2_bg is defined and banner2_bg else (settings.banner2_bg if settings and settings.banner2_bg else '#121419')) %}
+{% set b3bg = (banner3_bg if banner3_bg is defined and banner3_bg else (settings.banner3_bg if settings and settings.banner3_bg else '#121419')) %}
+
+{% set b1fg = (banner1_fg if banner1_fg is defined and banner1_fg else (settings.banner1_fg if settings and settings.banner1_fg else '#ffffff')) %}
+{% set b2fg = (banner2_fg if banner2_fg is defined and banner2_fg else (settings.banner2_fg if settings and settings.banner2_fg else '#ffffff')) %}
+{% set b3fg = (banner3_fg if banner3_fg is defined and banner3_fg else (settings.banner3_fg if settings and settings.banner3_fg else '#ffffff')) %}
+
+{% if b1t or b2t or b3t %}
+  <div class="shell" style="margin:12px auto 0">
+    <div class="banner-row">
+      {% if b1t %}<div class="banner" style="background: {{ b1bg }}; color: {{ b1fg }};"><span class="banner-text">{{ b1t }}</span></div>{% endif %}
+      {% if b2t %}<div class="banner" style="background: {{ b2bg }}; color: {{ b2fg }};"><span class="banner-text">{{ b2t }}</span></div>{% endif %}
+      {% if b3t %}<div class="banner" style="background: {{ b3bg }}; color: {{ b3fg }};"><span class="banner-text">{{ b3t }}</span></div>{% endif %}
+    </div>
+  </div>
+  <style>
+    .banner-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:stretch}
+    @media (max-width:640px){.banner-row{grid-template-columns:1fr}}
+    .banner{border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.18),0 1px 0 rgba(255,255,255,.04) inset;font-weight:700;letter-spacing:.2px}
+    .banner-text{display:inline-flex;align-items:center;gap:.5rem}
+  </style>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<style>
+  /* helpers so mobile/desktop sections toggle reliably */
+  .show-mobile{display:none!important}.hide-mobile{display:block!important}
+  @media (max-width:768px){.show-mobile{display:block!important}.hide-mobile{display:none!important}}
+
+  /* ====== Game icon balance pill (near icon, not in card body) ====== */
+  .game-card .game-media{position:relative}
+  .gv-balance-pill{
+    position:absolute; left:10px; top:10px;
+    padding:4px 10px; border-radius:999px;
+    font-size:12px; font-weight:800; letter-spacing:.2px;
+    color:#fff; background:linear-gradient(135deg,#1ad1a5,#16c2ff);
+    box-shadow:0 10px 26px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.06) inset;
+    backdrop-filter:saturate(120%) blur(2px);
+    pointer-events:none; user-select:none;
+  }
+  @media (max-width:520px){
+    .gv-balance-pill{font-size:11px; padding:3px 8px; left:8px; top:8px}
+  }
+</style>
+
+<div class="shell player-grid" style="margin-top:14px">
+  <!-- Left rail (desktop/tablet) -->
+  <aside class="rail rail--sticky">
+    <!-- Add Funds (desktop) -->
+    <div class="rail-card hide-mobile">
+      <div class="rail-title">Add Funds</div>
+      {% if current_user.is_authenticated %}
+        <a class="btn btn-primary btn-wide" href="{{ url_for('playerbp.deposit_step1') }}">Add Credits</a>
+        <div class="method-row" style="margin-top:10px">
+          <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}">Chime</a>
+          <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}">Crypto</a>
+        </div>
+        <div class="rail-sub">Crypto &amp; Chime supported.</div>
+      {% else %}
+        <a class="btn btn-primary btn-wide" href="{{ url_for('auth.register_get') }}">Create account to add funds</a>
+        <div class="rail-sub">Sign in to deposit with Crypto or Chime.</div>
+      {% endif %}
+    </div>
+
+    <!-- Withdraw (desktop) -->
+    <div class="rail-card hide-mobile">
+      <div class="rail-title">Withdraw</div>
+      {% if current_user.is_authenticated %}
+        <a class="btn btn-wide" href="{{ url_for('playerbp.withdraw_get') }}">Request Payout</a>
+        {% if settings %}<div class="rail-sub">Min: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>{% endif %}
+      {% else %}
+        <a class="btn btn-wide" href="{{ url_for('auth.login_get') }}">Sign in</a>
+        <div class="rail-sub">Withdrawals require an account.</div>
+      {% endif %}
+    </div>
+
+    <!-- Contact Us (desktop) -->
+    <div class="rail-card hide-mobile" id="contact">
+      <div class="rail-title">Contact Us</div>
+      {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/+12342795662') %}
+      {% set tg = (settings.telegram_url if settings and settings.telegram_url else 'https://t.me/Neonspire') %}
+      {% set fb = (settings.facebook_url if settings and settings.facebook_url else 'https://www.facebook.com/neonspirecas') %}
+      {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/neonspirecasino') %}
+      <div class="contact-grid">
+        <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener noreferrer" data-external="1">💬 WhatsApp</a>
+        <a class="btn btn-mini btn-wide" href="{{ tg }}" target="_blank" rel="noopener noreferrer" data-external="1">📱 Telegram</a>
+        <a class="btn btn-mini btn-wide" href="{{ fb }}" target="_blank" rel="noopener noreferrer" data-external="1">📘 Facebook</a>
+        <a class="btn btn-mini btn-wide" href="{{ ig }}" target="_blank" rel="noopener noreferrer" data-external="1">📷 Instagram</a>
+      </div>
+      <div class="rail-sub" style="margin-top:8px">We’re available 24/7.</div>
+    </div>
+
+    <!-- Referral (desktop) -->
+    <div class="rail-card hide-mobile">
+      <div class="rail-title">Referral Program</div>
+      {% if current_user.is_authenticated %}
+        <button type="button" class="btn btn-wide js-ref-btn">Get My Link</button>
+      {% else %}
+        <a class="btn btn-wide" href="{{ url_for('auth.register_get') }}">Get My Link</a>
+      {% endif %}
+    </div>
+  </aside>
+
+  <!-- Main column -->
+  <section>
+    <!-- MOBILE: Add Funds + Withdraw ABOVE the games -->
+    <div class="show-mobile" style="display:none">
+      <div class="panel">
+        <div class="rail-title">Add Funds</div>
+        {% if current_user.is_authenticated %}
+          <a class="btn btn-primary btn-wide" href="{{ url_for('playerbp.deposit_step1') }}">Add Credits</a>
+          <div class="method-row" style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}">Chime</a>
+            <a class="btn btn-mini" href="{{ url_for('playerbp.deposit_step1') }}">Crypto</a>
+          </div>
+          <div class="muted" style="margin-top:8px">Crypto &amp; Chime supported.</div>
+        {% else %}
+          <a class="btn btn-primary btn-wide" href="{{ url_for('auth.register_get') }}">Create account to add funds</a>
+          <div class="muted" style="margin-top:8px">Sign in to deposit with Crypto or Chime.</div>
+        {% endif %}
+      </div>
+
+      <div class="panel">
+        <div class="rail-title">Withdraw</div>
+        {% if current_user.is_authenticated %}
+          <a class="btn btn-wide" href="{{ url_for('playerbp.withdraw_get') }}">Request Payout</a>
+          {% if settings %}<div class="muted" style="margin-top:8px">Min: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>{% endif %}
+        {% else %}
+          <a class="btn btn-wide" href="{{ url_for('auth.login_get') }}">Sign in</a>
+          <div class="muted" style="margin-top:8px">Withdrawals require an account.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Trending -->
+    <div class="panel">
+      <div class="panel-head">
+        <div class="h3">Today’s Trending</div>
+        <div class="muted">Updated live</div>
+      </div>
+      <div class="chip-row">
+        {% for tg in trending_games %}
+          <span class="chip" title="{{ tg.name }}">
+            {% if tg.icon_url %}<img class="chip-icon" src="{{ tg.icon_url }}" alt="{{ tg.name }}">{% endif %}
+            {{ tg.name }}
+          </span>
+        {% else %}
+          <span class="muted">No games yet.</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Games -->
+    <div class="panel">
+      <div class="panel-head">
+        <div class="h3">Games</div>
+        {% if settings %}<div class="muted">Min withdraw: {{ settings.min_redeem or 0 }} • Max: {{ settings.max_redeem or 0 }}</div>{% endif %}
+      </div>
+
+      <div class="game-grid">
+        {% for g in games %}
+          {# current user's first account for this game, if any #}
+          {% set accs = accounts_by_game.get(g.id) if accounts_by_game else None %}
+          {% set acc = (accs[0] if accs and accs|length else none) %}
+
+          {# robust GV detection: "GameVault" or "Game Vault" #}
+          {% set is_gv = ((g.name or '')|lower).replace(' ', '') == 'gamevault' %}
+
+          {# compute balance: prefer per-account (balance/credits/amount), else fall back to wallet.balance #}
+          {% set b = 0 %}
+          {% if acc %}
+            {% set b = acc.balance
+                      |default(acc.credits
+                      |default(acc.amount
+                      |default(0))) %}
+          {% endif %}
+          {% if (not b) and wallet %}
+            {% set b = wallet.balance|default(0) %}
+          {% endif %}
+
+          <article class="game-card">
+            <div class="game-media">
+              {% if g.icon_url %}<img src="{{ g.icon_url }}" alt="{{ g.name }}">{% else %}<div class="media-fallback">🎮</div>{% endif %}
+
+              {% if current_user.is_authenticated and is_gv and b and b > 0 %}
+                <div class="gv-balance-pill" aria-label="GameVault credits">
+                  Credits: {{ b }}
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="game-body">
+              <div class="game-title" title="{{ g.name }}">{{ g.name }}</div>
+              <div class="game-sub show-full" title="{{ g.description or '' }}">{{ g.description or "Hottest game on the market" }}</div>
+            </div>
+
+            <div class="game-actions btn-grid">
+              {% if g.download_url %}
+                <a class="btn btn-action" target="_blank" href="{{ g.download_url }}">Download</a>
+              {% else %}
+                <button class="btn btn-action" disabled>Download</button>
+              {% endif %}
+
+              {% if current_user.is_authenticated %}
+                <a class="btn btn-action" href="{{ url_for('playerbp.deposit_step1') }}?game_id={{ g.id }}">Deposit</a>
+                <a class="btn btn-action" href="{{ url_for('playerbp.withdraw_get') }}?game_id={{ g.id }}">Withdraw</a>
+                <form method="post" action="{{ url_for('playerbp.request_game_account', game_id=g.id) }}" style="display:contents">
+                  <button class="btn btn-action btn-primary" type="submit">Request ID</button>
+                </form>
+              {% else %}
+                <a class="btn btn-action" href="{{ url_for('auth.login_get') }}">Deposit</a>
+                <a class="btn btn-action" href="{{ url_for('auth.login_get') }}">Withdraw</a>
+                <a class="btn btn-action btn-primary" href="{{ url_for('auth.register_get') }}">Request ID</a>
+              {% endif %}
+            </div>
+          </article>
+        {% else %}
+          <div class="muted">No games available yet. Please check back soon.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- MOBILE: Contact + Referral BELOW the games -->
+    <div class="show-mobile" style="display:none">
+      <div class="panel" id="contact-mobile">
+        <div class="rail-title">Contact Us</div>
+        {% set wa = (settings.whatsapp_url if settings and settings.whatsapp_url else 'https://wa.me/+12342795662') %}
+        {% set tg = (settings.telegram_url if settings and settings.telegram_url else 'https://t.me/Neonspire') %}
+        {% set fb = (settings.facebook_url if settings and settings.facebook_url else 'https://www.facebook.com/neonspirecas') %}
+        {% set ig = (settings.instagram_url if settings and settings.instagram_url else 'https://instagram.com/neonspirecasino') %}
+        <div class="contact-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <a class="btn btn-mini btn-wide" href="{{ wa }}" target="_blank" rel="noopener noreferrer" data-external="1">💬 WhatsApp</a>
+          <a class="btn btn-mini btn-wide" href="{{ tg }}" target="_blank" rel="noopener noreferrer" data-external="1">📱 Telegram</a>
+          <a class="btn btn-mini btn-wide" href="{{ fb }}" target="_blank" rel="noopener noreferrer" data-external="1">📘 Facebook</a>
+          <a class="btn btn-mini btn-wide" href="{{ ig }}" target="_blank" rel="noopener noreferrer" data-external="1">📷 Instagram</a>
+        </div>
+        <div class="muted" style="margin-top:8px">We’re available 24/7.</div>
+      </div>
+
+      <div class="panel">
+        <div class="rail-title">Referral Program</div>
+        {% if current_user.is_authenticated %}
+          <button type="button" class="btn btn-wide js-ref-btn">Get My Link</button>
+        {% else %}
+          <a class="btn btn-wide" href="{{ url_for('auth.register_get') }}">Get My Link</a>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+</div>
+
+{# ---- External link fail-safe ---- #}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  function isExternal(href) {
+    try { const u = new URL(href, window.location.href); return u.origin !== window.location.origin; }
+    catch { return false; }
+  }
+  document.querySelectorAll('a[data-external], a[target="_blank"]').forEach(function (a) {
+    if (!isExternal(a.href)) return;
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      try { window.open(a.href, '_blank', 'noopener'); }
+      catch (_) { window.location.href = a.href; }
+      return false;
+    }, { capture: true });
+  });
+});
+</script>
+
+{% if current_user.is_authenticated and ((current_user.role or '')|upper == 'PLAYER') %}
+{# ============================ REFERRAL MODAL & JS ============================ #}
+<div id="refModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="refTitle"
+     style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:9999;">
+  <div data-ref-overlay style="position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:saturate(120%) blur(2px)"></div>
+  <div class="panel" role="document" style="position:relative;max-width:640px;width:92%;border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.35);z-index:1">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+      <div id="refTitle" class="h3">Your Referral Link</div>
+      <button type="button" class="btn btn-ghost" id="refCloseBtn" aria-label="Close">✕</button>
+    </div>
+    <div id="refBody">
+      <div id="refLoading" class="muted">Generating your link…</div>
+      <div id="refResult" style="display:none">
+        <div class="muted" style="margin:0 0 8px 0">Share this link. It includes your code <b id="refCodeText">—</b>.</div>
+        <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">
+          <input id="refLinkInput" class="input" readonly value="">
+          <button class="btn btn-primary" type="button" id="copyRefBtn">Copy</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap">
+          <a id="openRefBtn" class="btn" href="#" target="_blank" rel="noopener">Open</a>
+          <button class="btn btn-ghost" type="button" id="newRefBtn">Regenerate</button>
+        </div>
+        <div class="muted" style="margin-top:8px;font-size:12px">Refer your friends and family to get exciting bonus 🎁</div>
+      </div>
+      <div id="refError" style="display:none;color:#ff8a8a">Couldn’t get your link. Please try again.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const modal   = document.getElementById('refModal');
+  if(!modal) return;
+  const closeBtn= document.getElementById('refCloseBtn');
+  const overlay = modal.querySelector('[data-ref-overlay]');
+  const loadingEl  = document.getElementById('refLoading');
+  const resultEl   = document.getElementById('refResult');
+  const errorEl    = document.getElementById('refError');
+  const inputEl    = document.getElementById('refLinkInput');
+  const codeEl     = document.getElementById('refCodeText');
+  const copyBtn    = document.getElementById('copyRefBtn');
+  const openBtn    = document.getElementById('openRefBtn');
+  const regenBtn   = document.getElementById('newRefBtn');
+
+  function openModal(){ modal.style.display='flex'; document.body.style.overflow='hidden'; }
+  function closeModal(){ modal.style.display='none'; document.body.style.overflow=''; }
+  function setState(state){
+    loadingEl.style.display = state==='loading' ? '' : 'none';
+    resultEl.style.display  = state==='result'  ? '' : 'none';
+    errorEl.style.display   = state==='error'   ? '' : 'none';
+  }
+
+  async function fetchRef(jsonUrl){
+    setState('loading');
+    try{
+      const r = await fetch(jsonUrl, {credentials:'same-origin', headers:{'Accept':'application/json'}});
+      if(!r.ok) throw new Error('bad response');
+      const data = await r.json();
+      inputEl.value = data.link || '';
+      codeEl.textContent = data.code || '—';
+      openBtn.href = data.link || '#';
+      setState('result');
+    }catch(e){ setState('error'); }
+  }
+
+  // Click handler for *buttons* (no anchors)
+  document.addEventListener('click', function(e){
+    const t = e.target.closest('.js-ref-btn');
+    if(!t) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    openModal();
+    fetchRef("{{ url_for('playerbp.referral_my_link_json') }}");
+  }, true); // capture for extra safety
+
+  if(regenBtn){
+    regenBtn.addEventListener('click', ()=>{ fetchRef("{{ url_for('playerbp.referral_my_link_json') }}?force=1"); });
+  }
+
+  if(copyBtn){
+    copyBtn.addEventListener('click', async ()=>{
+      try{
+        inputEl.select(); inputEl.setSelectionRange(0, 99999);
+        if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(inputEl.value); }
+        else { document.execCommand('copy'); }
+        copyBtn.textContent='Copied!'; setTimeout(()=>copyBtn.textContent='Copy', 1200);
+      }catch(_){ alert('Copied!'); }
+    });
+  }
+
+  [closeBtn, overlay].forEach(el=> el && el.addEventListener('click', closeModal));
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && modal.style.display==='flex'){ closeModal(); } });
+})();
+</script>
+{% endif %}
+{% endblock %}

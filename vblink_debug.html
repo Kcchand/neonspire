@@ -1,0 +1,24 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/kcchandra/Desktop/webapp/crypto_casino/automation/vblink_ui_bot.py", line 296, in <module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/kcchandra/Desktop/webapp/crypto_casino/automation/vblink_ui_bot.py", line 265, in main
+    res = await create_player(page, new_user, DEFAULT_CREATE_PASSWORD)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kcchandra/Desktop/webapp/crypto_casino/automation/vblink_ui_bot.py", line 162, in create_player
+    raise RuntimeError("Add Player form inputs not found — check form structure\n" + html[:500])
+RuntimeError: Add Player form inputs not found — check form structure
+<!DOCTYPE html><html class="nprogress-busy"><head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1"><meta name="renderer" content="webkit"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta http-equiv="cache-control" content="no-cache,no-store,must-revalidate"><meta http-equiv="pragma" content="no-cache"><meta http-equiv="Expires" content="0"><link rel="icon" href="./config/favicon.ico"><title>User Managemen
+[vblink_ui_bot] .env loaded from /Users/kcchandra/Desktop/webapp/crypto_casino/.env
+[login] success

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell n-page" style="margin-top:8px">
+
+  <!-- ===== Unread ===== -->
+  <div class="panel">
+    <div class="n-header">
+      <div class="n-title">Notifications</div>
+      <form method="post" action="{{ url_for('notifybp.mark_all_read') }}">
+        <button class="btn btn-mini pill" type="submit" title="Mark all unread as read">Mark all as read</button>
+      </form>
+    </div>
+
+    <div class="n-section-head">
+      <div class="n-section-title">Unread</div>
+      <span class="n-count">{{ unread|length if unread else 0 }}</span>
+    </div>
+
+    {% if unread %}
+      <div class="n-list">
+        {% for n in unread %}
+          <div class="n-card n-card--unread">
+            <div class="n-icon" aria-hidden="true">🔔</div>
+
+            <div class="n-body">
+              <div class="n-text">{{ n.message }}</div>
+              {% if n.created_at %}
+              <div class="n-meta">
+                {{ n.created_at.strftime('%b %d, %Y • %I:%M %p') }}
+              </div>
+              {% endif %}
+            </div>
+
+            <div class="n-action">
+              <form method="post" action="{{ url_for('notifybp.mark_read', note_id=n.id) }}">
+                <button class="btn btn-mini" type="submit">Mark read</button>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="muted" style="margin-top:6px">No unread notifications.</div>
+    {% endif %}
+  </div>
+
+  <!-- ===== History ===== -->
+  <div class="panel">
+    <div class="n-section-head">
+      <div class="n-section-title">History</div>
+      <span class="n-count">{{ history|length if history else 0 }}</span>
+    </div>
+
+    {% if history %}
+      <div class="n-list">
+        {% for n in history %}
+          <div class="n-card">
+            <div class="n-icon" aria-hidden="true">📨</div>
+
+            <div class="n-body">
+              <div class="n-text">{{ n.message }}</div>
+              {% if n.created_at %}
+              <div class="n-meta">
+                {{ n.created_at.strftime('%b %d, %Y • %I:%M %p') }}
+              </div>
+              {% endif %}
+            </div>
+
+            <div class="n-action">
+              <!-- Example secondary action spot (kept empty for history) -->
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="muted" style="margin-top:6px">No previous notifications.</div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,264 @@
+<html xmlns="http://www.w3.org/1999/xhtml"><head><link href="styles/layout.css" rel="stylesheet" type="text/css"><link rel="Stylesheet" type="text/css" href="styles/DialogBySHF.css"><title>
+	Milkyway(STORE)
+</title>
+
+    <script type="text/javascript" src="scripts/common.js"></script>
+    <script type="text/javascript" src="scripts/comm.js"></script>
+    <script type="text/javascript" src="scripts/jquery.js"></script>
+    <script type="text/javascript" src="scripts/js/DialogBySHF.js"></script>
+    <script src="scripts/alert.js" type="text/javascript"></script>
+
+    <style type="text/css">
+        .topInd {
+            margin: 0;
+            padding: 0;
+            background-size: cover;
+            font-family: sans-serif;
+            height: 80px;
+            border: 1px solid #CCC;
+            text-align: center;
+        }
+
+        .btn12 {
+            display: inline-block;
+            padding: 6px 12px;
+            margin-top: 5px;
+            margin-bottom: 5px;
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 1.42857143;
+            white-space: nowrap;
+            vertical-align: middle;
+            -ms-touch-action: manipulation;
+            touch-action: manipulation;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            background-image: none;
+            border: 1px solid transparent;
+            border-radius: 16px;
+        }
+
+        .btn-danger1 {
+            color: #fff;
+            background-color: #326189;
+            border-color: #326890;
+        }
+
+        .btn-danger2 {
+            padding: 6px 12px;
+            transform: translate(0px,3px);
+            height: 25px;
+            background-color: #fcf8e3;
+            border-color: #cccccc;
+            border: 1px solid transparent;
+        }
+
+        input[type=button] {
+            -webkit-appearance: none;
+            outline: none;
+        }
+
+        input[type=submit] {
+            -webkit-appearance: none;
+            outline: none;
+        }
+
+        input[type=input] {
+            -webkit-appearance: none;
+            outline: none;
+        }
+
+        .toast {
+            display: none;
+            position: fixed;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0,0,0,0.2);
+            border-radius: 1rem;
+            color: #f0f0f0;
+            font-size: 2.5rem;
+        }
+
+        .load {
+            display: inline-block;
+            margin-bottom: 1.5rem;
+            height: 4rem;
+            width: 4rem;
+            border: 0.4rem solid transparent;
+            border-top-color: white;
+            border-left-color: white;
+            border-bottom-color: white;
+            animation: circle 1s infinite linear;
+            -webkit-animation: circle 1s infinite linear; /* Safari 和 Chrome */
+            border-radius: 50%;
+        }
+
+        @-webkit-keyframes circle {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(-360deg);
+            }
+        }
+    </style>
+
+</head>
+<body class="warper"><div style="position: absolute; z-index: 19700; top: -1970px; left: -1970px; display: none;"><iframe src="https://milkywayapp.xyz:8781/scripts/My97DatePicker/My97DatePicker.htm" frameborder="0" border="0" scrolling="no" style="width: 186px; height: 199px;"></iframe></div>
+    <div class="toast" id="toast" style="display: none;">
+        <span class="load"></span>
+        <span>loading...</span>
+    </div>
+
+    <table border="0" cellspacing="0" cellpadding="0" width="100%" height="100%">
+        <tbody>
+            <tr>
+                <td class="topIndex">
+                    <div class="left" style="transform: translate(25px,10px)">
+                        <span style="color: white; font-family: sans-serif; font-size: 20px">Milkyway </span>
+
+                        <span style="color: white; font-family: sans-serif; font-size: 14px">(Release) / </span>
+          
+                        <span style="color: white; font-family: sans-serif; font-size: 14px" class="cheng" id="UserTitle">User Management</span>                  
+                    </div>
+                   
+                    <div class="right " style="transform: translate(-15px,0px)">
+                        
+                        <p id="UserID" style="display: none" hidden="">45836</p>
+                         
+                        
+                        <div class="btn-danger1 btn12" style="color: red" onclick="">
+                            
+              
+                            <span style="color: white; font-family: sans-serif; font-size: 14px">Welcome</span>
+          
+                            <span style="color: white; font-family: sans-serif;" class="cheng" id="UserName">Ros1820</span>
+                            
+                            <span style="color: white; font-family: sans-serif;" class="cheng">(STORE)</span>
+        
+                        </div>
+                        <div>
+                        </div>
+                    </div>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="btn-danger2 ">
+                    <span id="UserBalance" style="color: #028bbd; font-family: sans-serif; font-size: 14px">Balance:33</span>
+                    <span style="color: red; font-family: sans-serif; font-size: 12px"> </span>
+                     <form name="ctl04" method="post" action="Store.aspx" id="ctl04" class="right">
+<div>
+<input type="hidden" name="__EVENTTARGET" id="__EVENTTARGET" value="">
+<input type="hidden" name="__EVENTARGUMENT" id="__EVENTARGUMENT" value="">
+<input type="hidden" name="__LASTFOCUS" id="__LASTFOCUS" value="">
+<input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="/wEPDwULLTIwMjM1NTgxNjUPFgIeE1ZhbGlkYXRlUmVxdWVzdE1vZGUCARYCAgQPZBYCAgEPEGQQFQIHRW5nbGlzaAhFc3Bhw7FvbBUCATABMRQrAwJnZxYBZmRkf1KR7l1PDyIpUt1hZwLwNPeIa73pZgGV4sS2XRKo6jA=">
+</div>
+
+<script type="text/javascript">
+//<![CDATA[
+var theForm = document.forms['ctl04'];
+if (!theForm) {
+    theForm = document.ctl04;
+}
+function __doPostBack(eventTarget, eventArgument) {
+    if (!theForm.onsubmit || (theForm.onsubmit() != false)) {
+        theForm.__EVENTTARGET.value = eventTarget;
+        theForm.__EVENTARGUMENT.value = eventArgument;
+        theForm.submit();
+    }
+}
+//]]>
+</script>
+
+
+<div>
+
+	<input type="hidden" name="__VIEWSTATEGENERATOR" id="__VIEWSTATEGENERATOR" value="0F2C5E87">
+	<input type="hidden" name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="/wEdAAQnqVnRw9FxvkJpoRNSu/yWlTTh72KLTLr/bTJ2lcUMVyi8kvOTr4T8NCLznjXmoL/cQYnJyGv7QmYC4j3KxIgSXT0hlpWv/kaLRE9tDdBARYpuybYzgZ3RiqV3fXNeTDc=">
+</div>
+                                    <img id="titleimg" src="/images/gl.png" style="width: 20px; position: absolute; transform: translate(0px,0px)">
+                                    <select name="ddlRole" onchange="javascript:setTimeout('__doPostBack(\'ddlRole\',\'\')', 0)" id="ddlRole" style="width:100px;margin-left: 30px;margin-top:0px">
+	<option selected="selected" value="0">English</option>
+	<option value="1">Español</option>
+
+</select>                        
+                     </form>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <div class="sidebar_a">
+                        <iframe src="Left.aspx" id="frm_left_frm" frameborder="0" style="width: 250px; height: 100%; visibility: inherit"></iframe>
+                    </div>
+                    <div class="sidebar_b">
+                        <iframe name="frm_main_content" id="frm_main_content" height="100%" src="right.aspx" frameborder="no" width="100%"></iframe>
+                    </div>
+                </td>
+            </tr>
+        </tbody>
+
+
+
+    </table>
+
+    <div id="msgBoxDIV" style="position: absolute; display: none; width: 100%; padding-top: 4px; height: 24px; top: 55px; text-align: center;"><span class="msg" id="spnTopMsg"></span></div>
+
+
+
+<script type="text/javascript">
+
+    function getRootPath() {
+        var strFullPath = window.document.location.href;
+        var strPath = window.document.location.pathname;
+        var pos = strFullPath.indexOf(strPath);
+        var prePath = strFullPath.substring(0, pos);
+        var postPath = strPath.substring(0, strPath.substr(1).indexOf('/') + 1);
+        return (prePath + postPath);
+    }
+
+    function showDialog(url, title, width, height) {
+        var tourl = getRootPath() + "/" + url;
+        $.DialogBySHF.Dialog({ Width: width, Height: height, Title: title, URL: tourl });
+    }
+
+    function CloseDiaLog() {
+        $.DialogBySHF.Close();
+    }
+
+    function showAlert(tipMsg) {
+        myAlert('Message', tipMsg, function () { });
+    }
+    function updateBalance(str) {
+       // document.getElementById('UserBalance').innerText = str
+
+        var temp1 = str.split(':')
+        document.getElementById('UserBalance').innerText = 'Balance' + ":" + temp1[1] 
+    }
+
+    var time_sd
+    function ShowLoading() {
+        var toast = document.getElementById("toast");
+        toast.style.display = "flex";
+        time_sd = setTimeout(function () {
+            toast.style.display = "none";
+        }, 3000);
+    }
+    function CloseLoading() {
+        var toast = document.getElementById("toast");
+        toast.style.display = "none";
+        clearTimeout(time_sd)
+    }
+
+</script>
+
+</body></html>

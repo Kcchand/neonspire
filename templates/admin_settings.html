@@ -1,0 +1,565 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="shell" style="display:flex;flex-direction:column;gap:14px">
+
+  <!-- Header / Shortcuts -->
+  <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div class="h3" style="font-size:20px">⚙️ Admin Settings</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a class="btn chip-btn" href="{{ url_for('adminbp.admin_home') }}">Overview</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.games_list') }}">Manage Games</a>
+      <a class="btn chip-btn" href="{{ url_for('adminbp.deposits_audit') }}">Deposits</a>
+      <!-- Added a bonus management link that works -->
+      <a class="btn chip-btn" href="{{ url_for('adminbp.settings_get') }}#bonus-settings">Bonus Settings</a>
+    </div>
+  </div>
+
+  <!-- Add Funds methods -->
+  <div class="panel">
+    <div class="h3">💳 Add Funds — Methods</div>
+    <p class="muted" style="margin:6px 0 14px">
+      Configure the text/handle and optional QR images your players will see when depositing.
+    </p>
+
+    <div class="method-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <!-- Crypto -->
+      <div class="card" style="padding:14px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+        <div class="method-title" style="font-weight:700;margin-bottom:8px">Crypto</div>
+        <form method="post" action="{{ url_for('adminbp.update_crypto_qr') }}" enctype="multipart/form-data">
+          <label class="muted" for="crypto_wallet_text">Wallet / Address (shown to players)</label>
+          <textarea id="crypto_wallet_text" name="crypto_wallet_text" rows="2" class="input"
+                    placeholder="USDT-TRC20: TX...">{{ settings.crypto_wallet_text if settings else '' }}</textarea>
+
+          <!-- Direct Pay Link (optional) -->
+          <div class="form-group" style="margin-top:10px">
+            <label class="muted" for="crypto_pay_url">Direct Pay Link (optional)</label>
+            <input id="crypto_pay_url"
+                   name="crypto_pay_url"
+                   type="url"
+                   class="input"
+                   value="{{ settings.crypto_pay_url or '' }}"
+                   placeholder="https://your-processor.example/pay?addr=...">
+            <div class="muted" style="font-size:12px;margin-top:6px">
+              If set, players will see a "Pay with Crypto" button that opens this link.
+            </div>
+          </div>
+
+          <!-- Deposit QR -->
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="crypto_qr">QR Image (optional)</label>
+              <input id="crypto_qr" type="file" name="crypto_qr" accept="image/*" class="input">
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG/WEBP up to ~5MB</div>
+            </div>
+            {% if settings and settings.crypto_qr_url %}
+              <img src="{{ settings.crypto_qr_url }}" alt="Crypto QR" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--stroke)">
+            {% endif %}
+          </div>
+
+          <!-- Withdraw – Crypto (payout) -->
+          <hr style="border:none;border-top:1px solid rgba(255,255,255,.06);margin:14px 0;">
+          <div class="h5" style="font-weight:600;margin-bottom:8px;font-size:13px;">Withdraw — Crypto (Payout)</div>
+
+          <div class="form-group">
+            <label class="muted" for="withdraw_crypto_address">Payout Crypto Address (our wallet)</label>
+            <input id="withdraw_crypto_address"
+                   name="withdraw_crypto_address"
+                   type="text"
+                   class="input"
+                   value="{{ settings.withdraw_crypto_address or '' }}"
+                   placeholder="USDT-TRC20: YOUR_WITHDRAW_WALLET">
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="withdraw_crypto_qr_file">Payout Crypto QR (shown on Withdraw page)</label>
+              <input id="withdraw_crypto_qr_file" type="file" name="withdraw_crypto_qr_file" accept="image/*" class="input">
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG/WEBP up to ~5MB</div>
+            </div>
+            {% if settings and settings.withdraw_crypto_qr_url %}
+              <img src="{{ settings.withdraw_crypto_qr_url }}" alt="Withdraw Crypto QR"
+                   style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--stroke)">
+            {% endif %}
+          </div>
+
+          <div style="margin-top:12px"><button class="btn btn-primary" type="submit">Save Crypto</button></div>
+        </form>
+      </div>
+
+      <!-- Chime -->
+      <div class="card" style="padding:14px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+        <div class="method-title" style="font-weight:700;margin-bottom:8px">Chime</div>
+        <form method="post" action="{{ url_for('adminbp.update_chime_qr') }}" enctype="multipart/form-data">
+          <label class="muted" for="chime_handle">Chime Handle (shown to players)</label>
+          <textarea id="chime_handle" name="chime_handle" rows="2" class="input"
+                    placeholder="@your-chime">{{ settings.chime_handle if settings else '' }}</textarea>
+
+          <!-- Direct Pay Link (optional) -->
+          <div class="form-group" style="margin-top:10px">
+            <label class="muted" for="chime_pay_url">Direct Pay Link (optional)</label>
+            <input id="chime_pay_url"
+                   name="chime_pay_url"
+                   type="url"
+                   class="input"
+                   value="{{ settings.chime_pay_url or '' }}"
+                   placeholder="https://chime.me/pay/your-handle">
+            <div class="muted" style="font-size:12px;margin-top:6px">
+              If set, players will see a "Pay with Chime" button that opens this link.
+            </div>
+          </div>
+
+          <!-- Deposit QR -->
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="chime_qr">QR Image (optional)</label>
+              <input id="chime_qr" type="file" name="chime_qr" accept="image/*" class="input">
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG/WEBP up to ~5MB</div>
+            </div>
+            {% if settings and settings.chime_qr_url %}
+              <img src="{{ settings.chime_qr_url }}" alt="Chime QR" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--stroke)">
+            {% endif %}
+          </div>
+
+          <!-- Withdraw – Chime (payout) -->
+          <hr style="border:none;border-top:1px solid rgba(255,255,255,.06);margin:14px 0;">
+          <div class="h5" style="font-weight:600;margin-bottom:8px;font-size:13px;">Withdraw — Chime (Payout)</div>
+
+          <div class="form-group">
+            <label class="muted" for="withdraw_chime_handle">Payout Chime Handle (our handle)</label>
+            <input id="withdraw_chime_handle"
+                   name="withdraw_chime_handle"
+                   type="text"
+                   class="input"
+                   value="{{ settings.withdraw_chime_handle or '' }}"
+                   placeholder="$YourChimeHandle">
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:10px;align-items:center">
+            <div>
+              <label class="muted" for="withdraw_chime_qr_file">Payout Chime QR (shown on Withdraw page)</label>
+              <input id="withdraw_chime_qr_file" type="file" name="withdraw_chime_qr_file" accept="image/*" class="input">
+              <div class="muted" style="font-size:12px;margin-top:6px">PNG/JPG/WEBP up to ~5MB</div>
+            </div>
+            {% if settings and settings.withdraw_chime_qr_url %}
+              <img src="{{ settings.withdraw_chime_qr_url }}" alt="Withdraw Chime QR"
+                   style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--stroke)">
+            {% endif %}
+          </div>
+
+          <div style="margin-top:12px"><button class="btn btn-primary" type="submit">Save Chime</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bonus Settings Panel (Added ID for anchor link) -->
+  <div class="panel" id="bonus-settings">
+    <div class="h3">🎁 Bonus Settings</div>
+    <p class="muted" style="margin:6px 0 14px">
+      Configure deposit bonuses for new and regular players. Players can only use first deposit bonus once.
+    </p>
+    
+    <form method="post" action="{{ url_for('adminbp.update_bonus_settings') }}">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(250px, 1fr));gap:16px;margin-bottom:20px;">
+        
+        <!-- First Deposit Bonus Settings -->
+        <div class="card" style="padding:16px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+          <div class="h5" style="font-weight:600;margin-bottom:12px;font-size:16px;color:#4ade80;">✨ First Deposit Bonus</div>
+          
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="muted" for="first_deposit_bonus_percent">Bonus Percentage</label>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <input id="first_deposit_bonus_percent" 
+                     name="first_deposit_bonus_percent" 
+                     type="number" 
+                     class="input" 
+                     min="0" 
+                     max="1000" 
+                     step="1"
+                     value="{{ settings.first_deposit_bonus_percent if settings and settings.first_deposit_bonus_percent is not none else '100' }}">
+              <span style="font-weight:600;color:var(--text);">%</span>
+            </div>
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              Example: 100% means $5 deposit = $5 bonus
+            </div>
+          </div>
+          
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="muted" for="first_deposit_min_amount">Minimum Deposit Amount ($)</label>
+            <input id="first_deposit_min_amount" 
+                   name="first_deposit_min_amount" 
+                   type="number" 
+                   class="input" 
+                   min="0" 
+                   step="0.01"
+                   value="{{ settings.first_deposit_min_amount if settings and settings.first_deposit_min_amount is not none else '5.00' }}">
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              Minimum deposit required to qualify for first bonus
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label class="muted" for="first_deposit_max_bonus">Maximum Bonus Amount ($)</label>
+            <input id="first_deposit_max_bonus" 
+                   name="first_deposit_max_bonus" 
+                   type="number" 
+                   class="input" 
+                   min="0" 
+                   step="0.01"
+                   value="{{ settings.first_deposit_max_bonus if settings and settings.first_deposit_max_bonus is not none else '1000.00' }}">
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              Caps the bonus amount (0 = no limit)
+            </div>
+          </div>
+        </div>
+        
+        <!-- Regular Deposit Bonus Settings -->
+        <div class="card" style="padding:16px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+          <div class="h5" style="font-weight:600;margin-bottom:12px;font-size:16px;color:#60a5fa;">🔄 Regular Deposit Bonus</div>
+          
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="muted" for="regular_deposit_bonus_percent">Bonus Percentage</label>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <input id="regular_deposit_bonus_percent" 
+                     name="regular_deposit_bonus_percent" 
+                     type="number" 
+                     class="input" 
+                     min="0" 
+                     max="1000" 
+                     step="1"
+                     value="{{ settings.regular_deposit_bonus_percent if settings and settings.regular_deposit_bonus_percent is not none else '50' }}">
+              <span style="font-weight:600;color:var(--text);">%</span>
+            </div>
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              Bonus for players who already used first deposit bonus
+            </div>
+          </div>
+          
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="muted" for="regular_deposit_min_amount">Minimum Deposit Amount ($)</label>
+            <input id="regular_deposit_min_amount" 
+                   name="regular_deposit_min_amount" 
+                   type="number" 
+                   class="input" 
+                   min="0" 
+                   step="0.01"
+                   value="{{ settings.regular_deposit_min_amount if settings and settings.regular_deposit_min_amount is not none else '10.00' }}">
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              Minimum deposit required for regular bonus
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label class="muted" for="regular_deposit_max_bonus">Maximum Bonus Amount ($)</label>
+            <input id="regular_deposit_max_bonus" 
+                   name="regular_deposit_max_bonus" 
+                   type="number" 
+                   class="input" 
+                   min="0" 
+                   step="0.01"
+                   value="{{ settings.regular_deposit_max_bonus if settings and settings.regular_deposit_max_bonus is not none else '500.00' }}">
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              Caps the bonus amount (0 = no limit)
+            </div>
+          </div>
+        </div>
+        
+        <!-- Bonus Rules & Settings -->
+        <div class="card" style="padding:16px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+          <div class="h5" style="font-weight:600;margin-bottom:12px;font-size:16px;color:#f472b6;">📋 Bonus Rules</div>
+          
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="muted" for="bonus_wagering_requirement">Wagering Requirement (x)</label>
+            <input id="bonus_wagering_requirement" 
+                   name="bonus_wagering_requirement" 
+                   type="number" 
+                   class="input" 
+                   min="0" 
+                   step="0.1"
+                   value="{{ settings.bonus_wagering_requirement if settings and settings.bonus_wagering_requirement is not none else '1.0' }}">
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              How many times bonus must be wagered before withdrawal
+            </div>
+          </div>
+          
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="muted" for="bonus_expiry_days">Bonus Expiry (Days)</label>
+            <input id="bonus_expiry_days" 
+                   name="bonus_expiry_days" 
+                   type="number" 
+                   class="input" 
+                   min="1" 
+                   step="1"
+                   value="{{ settings.bonus_expiry_days if settings and settings.bonus_expiry_days is not none else '30' }}">
+            <div class="muted" style="font-size:12px;margin-top:4px">
+              Number of days before bonus expires
+            </div>
+          </div>
+          
+          <div class="form-group" style="margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+              <input id="bonus_active" 
+                     name="bonus_active" 
+                     type="checkbox" 
+                     class="checkbox"
+                     {% if settings and settings.bonus_active %}checked{% else %}checked{% endif %}>
+              <label for="bonus_active" style="font-size:14px;color:var(--text);">
+                Enable Bonus System
+              </label>
+            </div>
+            <div class="muted" style="font-size:12px;margin-top:4px;margin-left:24px;">
+              Turn bonus system on/off globally
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+              <input id="allow_multiple_bonuses" 
+                     name="allow_multiple_bonuses" 
+                     type="checkbox" 
+                     class="checkbox"
+                     {% if settings and settings.allow_multiple_bonuses %}checked{% endif %}>
+              <label for="allow_multiple_bonuses" style="font-size:14px;color:var(--text);">
+                Allow Stacking Bonuses
+              </label>
+            </div>
+            <div class="muted" style="font-size:12px;margin-top:4px;margin-left:24px;">
+              Players can have multiple active bonuses
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div style="margin-top:12px">
+        <button class="btn btn-primary" type="submit" style="background-color:#8b5cf6;border-color:#8b5cf6;">
+          💾 Save Bonus Settings
+        </button>
+        <!-- FIXED: Removed the broken bonus_management link -->
+        <span class="btn muted" style="margin-left:8px;cursor:not-allowed;opacity:0.6;">
+          📊 Bonus Management (Coming Soon)
+        </span>
+      </div>
+    </form>
+  </div>
+
+  <!-- Promotions & News Ticker Section -->
+  <div class="panel">
+    <div class="h3">📢 Promotions & News Ticker</div>
+    <p class="muted" style="margin:6px 0 14px">
+      Edit the lobby news lines and bonus percent shown in the live ticker.
+    </p>
+    
+    <form method="post" action="{{ url_for('adminbp.update_promotions') }}">
+      <div style="display:grid;gap:16px;">
+        
+        <!-- Promo Line 1 -->
+        <div class="card" style="padding:16px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+          <div class="h5" style="font-weight:600;margin-bottom:8px;font-size:16px;">Promo Line 1</div>
+          <textarea id="promo_line1" 
+                    name="promo_line1" 
+                    rows="2" 
+                    class="input"
+                    placeholder="e.g., Orion is hitting today">{{ settings.promo_line1 if settings else '' }}</textarea>
+          <div class="muted" style="font-size:12px;margin-top:4px">
+            First promotional message shown in the ticker
+          </div>
+        </div>
+        
+        <!-- Promo Line 2 -->
+        <div class="card" style="padding:16px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+          <div class="h5" style="font-weight:600;margin-bottom:8px;font-size:16px;">Promo Line 2</div>
+          <textarea id="promo_line2" 
+                    name="promo_line2" 
+                    rows="2" 
+                    class="input"
+                    placeholder="e.g., +40% bonus on credit loads">{{ settings.promo_line2 if settings else '' }}</textarea>
+          <div class="muted" style="font-size:12px;margin-top:4px">
+            Second promotional message shown in the ticker
+          </div>
+        </div>
+        
+        <!-- Bonus Percent -->
+        <div class="card" style="padding:16px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel)">
+          <div class="h5" style="font-weight:600;margin-bottom:8px;font-size:16px;">Ticker Bonus Percent</div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <input id="ticker_bonus_percent" 
+                   name="ticker_bonus_percent" 
+                   type="number" 
+                   class="input" 
+                   min="0" 
+                   max="100" 
+                   step="1"
+                   value="{{ settings.ticker_bonus_percent if settings and settings.ticker_bonus_percent is not none else '0' }}">
+            <span style="font-weight:600;color:var(--text);">%</span>
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:4px">
+            Bonus percentage shown in ticker (0-100)
+          </div>
+        </div>
+        
+        <!-- Live Ticker Preview -->
+        <div class="card" style="padding:16px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel);border-left:4px solid #8b5cf6;">
+          <div class="h5" style="font-weight:600;margin-bottom:8px;font-size:16px;">Live Ticker Preview</div>
+          <div style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;font-family:monospace;color:#a78bfa;">
+            {{ settings.promo_line1 or 'Line 1...' }} • {{ settings.promo_line2 or 'Line 2...' }} • Bonus: {{ settings.ticker_bonus_percent or '0' }}%
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:4px">
+            How the ticker will appear to players in the lobby
+          </div>
+        </div>
+      </div>
+      
+      <div style="margin-top:12px">
+        <button class="btn btn-primary" type="submit">💾 Save Promotions</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Today's Trending Games -->
+  <div class="panel">
+    <div class="h3">🔥 Today's Trending Games</div>
+    <p class="muted" style="margin:6px 0 14px">
+      Pick games to highlight on the lobby. These will be featured prominently.
+    </p>
+    
+    <form method="post" action="{{ url_for('adminbp.update_trending_games') }}">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px;margin-bottom:16px;">
+        
+        <!-- Game Selection Cards -->
+        <div class="card" style="padding:12px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel);cursor:pointer;" onclick="toggleGame('orion')">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="game_orion" name="trending_games" value="OrionStars" 
+                   class="checkbox" {% if 'OrionStars' in trending_games %}checked{% endif %}>
+            <div>
+              <div class="h5" style="font-weight:600;margin:0;">OrionStars</div>
+              <div class="muted" style="font-size:12px;">Popular slots & fish games</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card" style="padding:12px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel);cursor:pointer;" onclick="toggleGame('fire')">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="game_fire" name="trending_games" value="FireKirin" 
+                   class="checkbox" {% if 'FireKirin' in trending_games %}checked{% endif %}>
+            <div>
+              <div class="h5" style="font-weight:600;margin:0;">FireKirin</div>
+              <div class="muted" style="font-size:12px;">Arcade-style fish games</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card" style="padding:12px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel);cursor:pointer;" onclick="toggleGame('milky')">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="game_milky" name="trending_games" value="MilkyWays" 
+                   class="checkbox" {% if 'MilkyWays' in trending_games %}checked{% endif %}>
+            <div>
+              <div class="h5" style="font-weight:600;margin:0;">MilkyWays</div>
+              <div class="muted" style="font-size:12px;">Space-themed slots</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Add more games as needed -->
+        <div class="card" style="padding:12px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel);cursor:pointer;" onclick="toggleGame('vblink')">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="game_vblink" name="trending_games" value="VBlink" 
+                   class="checkbox" {% if 'VBlink' in trending_games %}checked{% endif %}>
+            <div>
+              <div class="h5" style="font-weight:600;margin:0;">VBlink</div>
+              <div class="muted" style="font-size:12px;">Virtual betting games</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card" style="padding:12px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel);cursor:pointer;" onclick="toggleGame('ultramonster')">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="game_ultra" name="trending_games" value="UltraMonster" 
+                   class="checkbox" {% if 'UltraMonster' in trending_games %}checked{% endif %}>
+            <div>
+              <div class="h5" style="font-weight:600;margin:0;">UltraMonster</div>
+              <div class="muted" style="font-size:12px;">Monster hunting games</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card" style="padding:12px;border:1px solid var(--stroke);border-radius:12px;background:var(--panel);cursor:pointer;" onclick="toggleGame('pandamaster')">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="game_panda" name="trending_games" value="PandaMaster" 
+                   class="checkbox" {% if 'PandaMaster' in trending_games %}checked{% endif %}>
+            <div>
+              <div class="h5" style="font-weight:600;margin:0;">PandaMaster</div>
+              <div class="muted" style="font-size:12px;">Asian-themed slots</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Internal Note -->
+      <div class="form-group" style="margin-bottom:16px">
+        <label class="muted" for="trending_note">Internal Note (optional)</label>
+        <textarea id="trending_note" 
+                  name="trending_note" 
+                  rows="2" 
+                  class="input"
+                  placeholder="Short note for internal use">{{ settings.trending_note if settings else '' }}</textarea>
+        <div class="muted" style="font-size:12px;margin-top:4px">
+          This note is only visible to admins
+        </div>
+      </div>
+      
+      <div style="margin-top:12px">
+        <button class="btn btn-primary" type="submit">💾 Save Trending Games</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Withdrawal limits -->
+  <div class="panel">
+    <div class="h3">💵 Withdrawal Limits</div>
+    <form method="post" action="{{ url_for('adminbp.update_limits') }}">
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:12px;align-items:end">
+        <div>
+          <label class="muted" for="min_redeem">Min Withdraw</label>
+          <input id="min_redeem" name="min_redeem" type="number" class="input" placeholder="e.g. 50"
+                 value="{{ settings.min_redeem if settings and settings.min_redeem is not none else '' }}">
+        </div>
+        <div>
+          <label class="muted" for="max_redeem">Max Withdraw</label>
+          <input id="max_redeem" name="max_redeem" type="number" class="input" placeholder="e.g. 500"
+                 value="{{ settings.max_redeem if settings and settings.max_redeem is not none else '' }}">
+        </div>
+      </div>
+      <div style="margin-top:12px"><button class="btn btn-primary" type="submit">Save Limits</button></div>
+    </form>
+  </div>
+
+</div>
+
+<script>
+function toggleGame(gameId) {
+  const checkbox = document.getElementById(`game_${gameId}`);
+  checkbox.checked = !checkbox.checked;
+  
+  // Visual feedback
+  const card = checkbox.closest('.card');
+  if (checkbox.checked) {
+    card.style.borderColor = '#8b5cf6';
+    card.style.backgroundColor = 'rgba(139, 92, 246, 0.1)';
+  } else {
+    card.style.borderColor = 'var(--stroke)';
+    card.style.backgroundColor = 'var(--panel)';
+  }
+}
+
+// Initialize card styles based on checkbox state
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('input[name="trending_games"]').forEach(checkbox => {
+    const card = checkbox.closest('.card');
+    if (checkbox.checked) {
+      card.style.borderColor = '#8b5cf6';
+      card.style.backgroundColor = 'rgba(139, 92, 246, 0.1)';
+    }
+  });
+});
+</script>
+{% endblock %}

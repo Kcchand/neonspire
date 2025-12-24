@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="shell" style="margin-top:14px">
+
+  <div class="panel">
+    <div class="section-head" style="align-items:center">
+      <div class="section-title">
+        Chat with
+        <strong>
+          {% if player and player.name %}{{ player.name }}
+          {% elif player %}{{ player.email }}
+          {% else %}Player #{{ thread.player_id }}
+          {% endif %}
+        </strong>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        {% if not thread.employee_id and current_user.role in ['EMPLOYEE','ADMIN'] %}
+          <form method="post" action="{{ url_for('chat_bp.claim_thread', thread_id=thread.id) }}">
+            <button class="btn">Claim</button>
+          </form>
+        {% endif %}
+        <form method="post" action="{{ url_for('chat_bp.close_thread', thread_id=thread.id) }}">
+          <button class="btn btn-ghost">Close</button>
+        </form>
+        <a class="btn" href="{{ url_for('chat_bp.inbox') }}">Back to Inbox</a>
+      </div>
+    </div>
+
+    <div id="roomViewport" style="height:52vh;overflow:auto;background:rgba(255,255,255,.03);border:1px solid var(--stroke);border-radius:10px;padding:10px">
+      <div id="roomList" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div id="roomEmpty" class="muted" style="font-size:12px;display:none">No messages yet.</div>
+    </div>
+
+    <form id="roomForm" style="display:flex;gap:8px;margin-top:10px">
+      <input id="roomInput" class="input" type="text" maxlength="2000" placeholder="Type a reply…" style="flex:1">
+      <button class="btn btn-primary" type="submit">Send</button>
+    </form>
+    <div class="muted" style="font-size:12px;margin-top:6px">Press Enter to send</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const threadId = {{ thread.id }};
+  const list     = document.getElementById('roomList');
+  const empty    = document.getElementById('roomEmpty');
+  const viewport = document.getElementById('roomViewport');
+  const form     = document.getElementById('roomForm');
+  const input    = document.getElementById('roomInput');
+
+  let lastId = 0, timer = null;
+
+  function fmt(ts){
+    try { return new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
+    catch(_){ return ''; }
+  }
+
+  function render(items){
+    if(!items) return;
+    if(items.length === 0 && list.children.length === 0){
+      empty.style.display = '';
+    }else{
+      empty.style.display = 'none';
+    }
+    const frag = document.createDocumentFragment();
+    for(const m of items){
+      lastId = Math.max(lastId, m.id);
+      const row = document.createElement('div');
+      row.style.display='grid';
+      row.style.gridTemplateColumns='1fr auto';
+      row.style.gap='6px';
+      row.style.alignItems='baseline';
+
+      const who = document.createElement('div');
+      who.style.fontSize='12px';
+      who.style.opacity=.8;
+      who.textContent = (m.sender_role || 'USER');
+
+      const when = document.createElement('div');
+      when.className='muted';
+      when.style.fontSize='11px';
+      when.textContent = fmt(m.created_at);
+
+      const bubble = document.createElement('div');
+      bubble.style.gridColumn='1 / -1';
+      bubble.style.background='rgba(255,255,255,.06)';
+      bubble.style.border='1px solid rgba(255,255,255,.08)';
+      bubble.style.borderRadius='10px';
+      bubble.style.padding='6px 8px';
+      bubble.style.wordBreak='break-word';
+      bubble.textContent = m.body;
+
+      row.appendChild(who); row.appendChild(when); row.appendChild(bubble);
+      frag.appendChild(row);
+    }
+    list.appendChild(frag);
+    viewport.scrollTop = viewport.scrollHeight;
+  }
+
+  async function poll(){
+    try{
+      const res = await fetch(`/chat/thread/${threadId}/messages?after_id=${lastId}`, {cache:'no-store'});
+      if(!res.ok) return;
+      const data = await res.json();
+      if(data && data.ok){
+        render(data.items || []);
+      }
+    }catch(_){}
+  }
+
+  function start(){ stop(); poll(); timer=setInterval(poll, 3000); }
+  function stop(){ if(timer){ clearInterval(timer); timer=null; } }
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const val = (input.value || '').trim();
+    if(!val) return;
+    input.value='';
+    try{
+      const res = await fetch(`/chat/thread/${threadId}/send`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ body: val })
+      });
+      if(!res.ok){
+        alert('Failed to send');
+        return;
+      }
+      const data = await res.json();
+      if(data && data.ok && data.item){
+        render([data.item]);
+      }
+    }catch(_){ alert('Network error'); }
+  });
+
+  input.addEventListener('keydown', (e)=>{
+    if(e.key==='Enter' && !e.shiftKey){
+      e.preventDefault(); form.dispatchEvent(new Event('submit'));
+    }
+  });
+
+  // go!
+  start();
+  window.addEventListener('beforeunload', stop);
+})();
+</script>
+{% endblock %}

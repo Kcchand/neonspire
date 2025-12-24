@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block hero %}{% endblock %}
+
+{% block content %}
+<style>
+  .tg-wrap {
+    min-height: calc(100vh - 120px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tg-card {
+    width: 100%;
+    max-width: 420px;
+    padding: 32px 28px;
+    border-radius: 18px;
+    background: radial-gradient(circle at top, rgba(16,185,129,.18), transparent 55%),
+                #020617;
+    box-shadow: 0 20px 70px rgba(0,0,0,.7);
+    text-align: center;
+  }
+  .tg-title {
+    font-size: 20px;
+    font-weight: 800;
+    margin-bottom: 4px;
+  }
+  .tg-sub {
+    font-size: 14px;
+    opacity: .8;
+    margin-bottom: 18px;
+  }
+  .tg-spinner {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 3px solid rgba(148,163,184,.4);
+    border-top-color: #22c55e;
+    margin: 0 auto 12px;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tg-status-ok {
+    color: #a5b4fc;
+  }
+  .tg-status-err {
+    color: #f97373;
+  }
+</style>
+
+<div class="tg-wrap">
+  <div class="tg-card">
+    <div class="tg-dot" style="width:10px;height:10px;border-radius:999px;background:#22c55e;margin:0 auto 14px;"></div>
+    <div class="tg-title">NeonSpire Casino</div>
+    <div class="tg-sub">Connecting your Telegram account…</div>
+
+    <div class="tg-spinner"></div>
+
+    <div id="tgStatus" class="tg-status-ok">
+      Please wait a moment.
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", async () => {
+  const statusEl = document.getElementById("tgStatus");
+  const webApp   = window.Telegram && window.Telegram.WebApp;
+
+  function setStatus(msg, isError) {
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+    statusEl.className = isError ? "tg-status-err" : "tg-status-ok";
+  }
+
+  // 1) Must be opened inside Telegram
+  if (!webApp || !webApp.initData) {
+    setStatus("Telegram did not send user info. Please open this from inside the Telegram bot.", true);
+    return;
+  }
+
+  try {
+    const resp = await fetch("{{ url_for('telegram_bp.tg_autologin') }}", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData: webApp.initData }),
+      credentials: "same-origin",
+    });
+
+    let data;
+    try {
+      data = await resp.json();
+    } catch (parseErr) {
+      setStatus("Error: backend did not return JSON.", true);
+      return;
+    }
+
+    if (!resp.ok || !data.ok) {
+      const err = (data && (data.detail || data.error)) || "unknown_error";
+      setStatus("Error: " + err, true);
+      return;
+    }
+
+    // Success: go to lobby
+    const target = data.redirect || "/";
+    setStatus("Connected! Loading lobby…", false);
+    window.location.href = target;
+  } catch (e) {
+    setStatus("Error: " + e.message, true);
+  }
+});
+</script>
+{% endblock %}

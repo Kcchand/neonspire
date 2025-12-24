@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="shell" style="margin-top:14px">
+
+  <!-- Header -->
+  <div class="panel era-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div class="h3">Ready Accounts</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <a class="btn" href="{{ url_for('adminbp.admin_settings') }}#bonus-settings" style="background:rgba(139, 92, 246, 0.1);color:#a78bfa;border-color:#8b5cf6;">
+        ⚙️ Bonus Settings
+      </a>
+      <a class="btn era-back" href="{{ url_for('employeebp.employee_home') }}">← Back</a>
+    </div>
+  </div>
+
+  <!-- Bonus Status Bar -->
+  <div class="panel" style="margin-bottom:12px;border-left:4px solid #8b5cf6;background:rgba(139, 92, 246, 0.05);">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+      <div style="font-weight:600;color:#a78bfa;">🎁 First Deposit Bonus System</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        {% if settings and settings.bonus_active %}
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#4ade80;"></span>
+          <span style="font-size:13px;color:#4ade80;">Active</span>
+        {% else %}
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f87171;"></span>
+          <span style="font-size:13px;color:#f87171;">Inactive</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="muted" style="font-size:13px;">
+      New players get <strong>{{ settings.first_deposit_bonus_percent or 100 }}% bonus</strong> on their first ${{ settings.first_deposit_min_amount or 5.00 }}+ deposit.
+      Mark accounts below as eligible for first-time bonus.
+    </div>
+  </div>
+
+  {% if not pool_available %}
+    <div class="panel">
+      <div class="muted">
+        Ready account pool is not configured. Define a <code>ReadyAccountPool</code> model to enable this page.
+      </div>
+    </div>
+  {% endif %}
+
+  {% if pool_available %}
+    <!-- Add form -->
+    <div class="panel" style="margin-bottom:12px">
+      <form method="post"
+            action="{{ url_for('employeebp.ready_accounts_add') }}"
+            class="era-form-grid"
+            style="display:grid;grid-template-columns:220px 1fr 1fr 1fr auto;gap:8px">
+        <label class="sr-only" for="game_id">Game</label>
+        <select class="input" id="game_id" name="game_id" required>
+          <option value="">Select game…</option>
+          {% for b in buckets %}
+            <option value="{{ b.game.id }}">{{ b.game.name }}</option>
+          {% endfor %}
+        </select>
+
+        <label class="sr-only" for="username">Username</label>
+        <input class="input" id="username" name="username" placeholder="Username" required autocomplete="off" autocapitalize="none" spellcheck="false">
+
+        <label class="sr-only" for="password">Password</label>
+        <input class="input" id="password" name="password" placeholder="Password" required autocomplete="off" autocapitalize="none" spellcheck="false">
+
+        <label class="sr-only" for="note">Note</label>
+        <input class="input" id="note" name="note" placeholder="Note (optional)" autocomplete="off">
+
+        <button class="btn btn-primary era-add-btn" type="submit">Add</button>
+      </form>
+
+      {% if buckets|length == 0 %}
+        <div class="muted" style="margin-top:8px">No active games found. Add a game first to populate this list.</div>
+      {% endif %}
+
+      <div class="muted" style="margin-top:6px;font-size:12px">
+        When you add an account, the system immediately tries to fulfill any open requests for that game.
+      </div>
+    </div>
+
+    <!-- Bonus Quick Actions -->
+    <div class="panel" style="margin-bottom:12px;background:rgba(139, 92, 246, 0.05);padding:12px;border-radius:10px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px;background:rgba(255,255,255,0.03);border-radius:8px;">
+          <div style="color:#a78bfa;font-size:20px;">🎯</div>
+          <div>
+            <div style="font-weight:600;font-size:14px;">First Bonus Eligible</div>
+            <div style="font-size:12px;color:#a78bfa;">Mark accounts for 100% bonus</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px;background:rgba(255,255,255,0.03);border-radius:8px;">
+          <div style="color:#60a5fa;font-size:20px;">📊</div>
+          <div>
+            <div style="font-weight:600;font-size:14px;">Bonus Stats</div>
+            <div style="font-size:12px;color:#60a5fa;">
+              {% if bonus_stats %}
+                {{ bonus_stats.eligible_accounts or 0 }} accounts marked
+              {% else %}
+                0 accounts marked
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px;background:rgba(255,255,255,0.03);border-radius:8px;">
+          <div style="color:#4ade80;font-size:20px;">⚡</div>
+          <div>
+            <div style="font-weight:600;font-size:14px;">Auto Apply</div>
+            <div style="font-size:12px;color:#4ade80;">System will apply bonus on first deposit</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Buckets by game -->
+    {% for b in buckets %}
+      <div class="panel" style="margin-top:12px">
+        <div class="h4 era-bucket-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <div>{{ b.game.name }}</div>
+          <div class="muted">
+            Available: <strong>{{ b.count }}</strong>
+            {% if b.bonus_eligible_count %}
+              <span style="margin-left:8px;color:#4ade80;">• Bonus Eligible: {{ b.bonus_eligible_count }}</span>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if b.count %}
+          <!-- mobile-friendly scroll container around table -->
+          <div class="era-table-wrap" style="overflow:auto">
+            <div class="table era-table" style="min-width:800px">
+              <div class="t-head">
+                <div>Username</div>
+                <div>Password</div>
+                <div>Note</div>
+                <div>Bonus Eligibility</div>
+                <div>Added</div>
+                <div class="t-right">Actions</div>
+              </div>
+
+              {% for r in b.rows %}
+                <div class="t-row">
+                  <div class="mono era-cell-break">{{ r.username }}</div>
+                  <div class="mono era-cell-break">{{ r.password }}</div>
+                  <div class="era-cell-wrap">{{ r.note or '—' }}</div>
+                  <div>
+                    {% if r.player_id and r.player_has_used_first_bonus %}
+                      <span class="bonus-status" style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:8px;background:rgba(96, 165, 250, 0.15);color:#60a5fa;font-size:12px;font-weight:600;">
+                        <span>✅</span> Used Bonus
+                      </span>
+                    {% elif r.player_id and not r.player_has_used_first_bonus %}
+                      <span class="bonus-status" style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:8px;background:rgba(74, 222, 128, 0.15);color:#4ade80;font-size:12px;font-weight:600;">
+                        <span>🎁</span> Eligible
+                      </span>
+                    {% else %}
+                      <form method="post" action="{{ url_for('employeebp.toggle_bonus_eligibility') }}" style="display:inline;">
+                        <input type="hidden" name="account_id" value="{{ r.id }}">
+                        <input type="hidden" name="current_status" value="{{ '1' if r.bonus_eligible else '0' }}">
+                        <button type="submit" class="bonus-toggle-btn" style="
+                          display:inline-flex;
+                          align-items:center;
+                          gap:4px;
+                          padding:4px 12px;
+                          border-radius:8px;
+                          border:1px solid {% if r.bonus_eligible %}#4ade80{% else %}#6b7280{% endif %};
+                          background:{% if r.bonus_eligible %}rgba(74, 222, 128, 0.15){% else %}rgba(107, 114, 128, 0.15){% endif %};
+                          color:{% if r.bonus_eligible %}#4ade80{% else %}#9ca3af{% endif %};
+                          font-size:12px;
+                          font-weight:600;
+                          cursor:pointer;
+                          transition:all 0.2s;
+                        ">
+                          {% if r.bonus_eligible %}
+                            <span>✓</span> Eligible
+                          {% else %}
+                            <span>○</span> Mark Eligible
+                          {% endif %}
+                        </button>
+                      </form>
+                    {% endif %}
+                    {% if r.player_id %}
+                      <div style="font-size:11px;color:#94a3b8;margin-top:4px;">
+                        Player: {{ r.player_name or 'Unknown' }}
+                      </div>
+                    {% endif %}
+                  </div>
+                  <div class="mono">{{ r.created_at and r.created_at.strftime('%Y-%m-%d %H:%M') or '—' }}</div>
+                  <div class="t-right">
+                    <form method="post"
+                          action="{{ url_for('employeebp.ready_accounts_delete', row_id=r.id) }}"
+                          onsubmit="return confirm('Delete this ready account?');"
+                          style="display:inline-block;">
+                      <button class="btn btn-mini" type="submit">Delete</button>
+                    </form>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        {% else %}
+          <div class="empty">No ready accounts saved for this game.</div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% endif %}
+</div>
+
+<style>
+  /* Visually-hidden but accessible label helper (in case your global CSS doesn't have it) */
+  .sr-only{
+    position:absolute !important;
+    width:1px !important;
+    height:1px !important;
+    padding:0 !important;
+    margin:-1px !important;
+    overflow:hidden !important;
+    clip:rect(0,0,0,0) !important;
+    white-space:nowrap !important;
+    border:0 !important;
+  }
+
+  /* Bonus toggle button hover effects */
+  .bonus-toggle-btn:hover {
+    transform: translateY(-1px);
+    opacity: 0.9;
+  }
+
+  /* ---------- MOBILE-ONLY IMPROVEMENTS (desktop untouched) ---------- */
+  @media (max-width: 768px){
+    /* Header: space better + full-width Back button if needed */
+    .era-header{ gap:12px; }
+    .era-back{ width:auto; }
+
+    /* Add form stacks to single column, larger touch targets */
+    .era-form-grid{
+      grid-template-columns: 1fr !important;
+      gap:10px !important;
+    }
+    .era-add-btn{
+      width:100%;
+      height:44px;
+    }
+    .era-form-grid .input{
+      min-height:44px;
+    }
+
+    /* Table: allow easier horizontal scroll & better wrapping */
+    .era-table-wrap{
+      -webkit-overflow-scrolling: touch;
+      border-radius: 10px;
+    }
+    .era-table{
+      min-width: 700px !important; /* Adjusted for bonus column */
+    }
+    .era-cell-break{
+      word-break: break-all;
+    }
+    .era-cell-wrap{
+      white-space: normal;
+      word-break: break-word;
+    }
+
+    /* Panel headings: tighter layout */
+    .era-bucket-head{
+      gap:10px;
+    }
+
+    /* Bonus toggle button mobile optimization */
+    .bonus-toggle-btn {
+      padding: 6px 10px !important;
+      font-size: 11px !important;
+    }
+
+    .bonus-status {
+      padding: 4px 6px !important;
+      font-size: 11px !important;
+    }
+  }
+</style>
+
+<script>
+  // Auto-refresh bonus eligibility status
+  document.addEventListener('DOMContentLoaded', function() {
+    // Add click handlers for bonus toggle buttons
+    const bonusButtons = document.querySelectorAll('.bonus-toggle-btn');
+    bonusButtons.forEach(button => {
+      button.addEventListener('click', function(e) {
+        // Optional: Add loading state
+        const originalText = this.innerHTML;
+        this.innerHTML = '<span>⏳</span> Updating...';
+        this.style.opacity = '0.7';
+        this.style.cursor = 'wait';
+        
+        // The form will submit normally
+      });
+    });
+    
+    // Show bonus tooltip on hover
+    const bonusStatuses = document.querySelectorAll('.bonus-status');
+    bonusStatuses.forEach(status => {
+      status.title = "Bonus eligibility is automatically tracked per player";
+    });
+  });
+</script>
+{% endblock %}
